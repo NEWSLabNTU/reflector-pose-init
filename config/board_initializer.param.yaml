@@ -1,0 +1,56 @@
+/**:
+  ros__parameters:
+    input_topic: /sensing/lidar/top/pointcloud_raw_ex
+    initialize_service: /localization/initialize
+    sensor_frame: velodyne
+    base_frame: base_link
+
+    accumulate_scans: 10
+    max_speed_for_init: 0.05          # [m/s]
+    max_attempts: 5
+    # Off by default: a silent fallback to a fixed pose turns a detector failure
+    # into a mislocalization report three weeks later.
+    fallback_to_user_defined_pose: false
+
+    # VLP-32C reports calibrated reflectivity: 0-100 diffuse, 101-255 reserved
+    # for retroreflectors. This threshold is a sensor contract, not a tuning.
+    intensity_threshold: 240.0
+    # Below 3 m the board falls into the sparse lower elevation band, where the
+    # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
+    # third from the rest of the cluster. Measured in simulation, not guessed.
+    range_min: 3.0
+    range_max: 18.0
+    height_min: 0.5
+    height_max: 1.5
+
+    # Governed by across-ring spacing, not within-ring spacing.
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+
+    board_width: 0.6
+    board_height: 0.97
+    board_centre_height: 1.0
+    extent_tolerance: [0.8, 1.5]      # fraction of nominal
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+
+    # Upper bound only: yaw, occlusion, and dropout legitimately reduce the
+    # return count, but nothing legitimately inflates it.
+    density_max_ratio: 1.4
+    density_check_enabled: true
+    azimuth_step_rad: 0.0035          # 0.2 deg at 600 rpm / 10 Hz
+
+    # [x, y, z, roll, pitch, yaw]. Rotation is intrinsic Rz(yaw) @ Ry(pitch)
+    # @ Rx(roll); angles are radians. This config drives both runtime init and
+    # offline anchoring, so map and pose guess cannot drift apart.
+    board_pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
+
+    # Loose on purpose. The service is called with method=AUTO, so NDT align
+    # refines the guess; an over-tight covariance makes it search too small a
+    # window, while an over-loose one costs a few hundred milliseconds.
+    sigma_xy_base: 0.15
+    sigma_xy_per_metre: 0.03
+    sigma_z: 0.10
+    sigma_yaw_base: 0.05
+    covariance_safety_factor: 2.0

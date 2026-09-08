@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!--
+  Board pose initializer. Off by default outdoors: launch with
+  use_board_initializer:=true, and only against a map anchored to the board.
+-->
+<launch>
+  <arg name="param_file"
+       default="$(find-pkg-share golfcart_board_initializer)/config/board_initializer.param.yaml"/>
+  <arg name="input_topic" default="/sensing/lidar/top/pointcloud_raw_ex"/>
+  <arg name="initialize_service" default="/localization/initialize"/>
+  <arg name="dry_run" default="false"/>
+
+  <node pkg="golfcart_board_initializer" exec="board_pose_initializer"
+        name="board_pose_initializer" output="screen">
+    <param from="$(var param_file)"/>
+    <param name="input_topic" value="$(var input_topic)"/>
+    <param name="initialize_service" value="$(var initialize_service)"/>
+    <param name="dry_run" value="$(var dry_run)"/>
+  </node>
+</launch>

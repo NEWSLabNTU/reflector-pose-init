@@ -1,0 +1,13 @@
+# Python and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Colcon/build artifacts
+build/
+install/
+log/
+
+# Local point-cloud exports; provide these as external map inputs instead
+*.ply
+*.pcd
