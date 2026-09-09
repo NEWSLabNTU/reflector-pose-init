@@ -81,7 +81,7 @@ def write_config(path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]"):
     """A minimal canonical config: the board section, and defaults elsewhere.
 
     Only ``board:`` is written because that is the section this tool's answer
-    depends on. Omitting ``detector:`` leaves the gates at the dataclass
+    depends on. Omitting ``detector:`` leaves the map policy at its independent
     defaults, which is what a bare ``anchor_cloud(cloud)`` uses — so a test
     that goes through the CLI and one that does not are comparing like with
     like.
@@ -91,7 +91,6 @@ def write_config(path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]"):
   pose_in_map: {pose}
   width: 0.8
   height: 1.0
-  centre_height: {BOARD_CENTRE_HEIGHT}
 """
     )
 

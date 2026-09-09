@@ -39,10 +39,11 @@ anchor-map-to-board slam_export.ply -o /path/to/map \
 | `--dry-run` | off | report the result, write nothing |
 | `--dump-debug PATH` | off | write an `.npz` for `anchor_debug_viewer` |
 
-`--config` is the source of truth. It supplies the detector gates, the physical
-board dimensions and `board.pose_in_map`; there are deliberately no CLI
-overrides for them. Pass the exact file the vehicle will load when building a
-deployment map.
+`--config` is the source of truth. It supplies the map detector policy, the
+shared physical board dimensions, and `board.pose_in_map`; there are
+deliberately no CLI overrides for them. Pass the exact file the vehicle will
+load when building a deployment map. The runtime policy is read from the same
+file but is not applied to the map.
 
 ## What it writes
 
@@ -102,9 +103,13 @@ separate viewer rather than inline.
   `[x, y, z, roll, pitch, yaw]`, angles in radians, rotation
   `Rz(yaw) @ Ry(pitch) @ Rx(roll)`.
 - `map_projector_info.yaml` must use `projector_type: Local`.
-- `board.centre_height` and `board.pose_in_map[2]` are different quantities: the
-  physical mounting height above the floor, and a map coordinate. Keep them
-  equal for a floor-level map.
+- `detector.map.board_centre_height` is a map-local gate measured from the
+  fitted floor. `detector.runtime.board_centre_height` is a separate gate in
+  `base_link`; it may be derived from the shared board height and the vehicle's
+  floor-to-`base_link` offset.
+- `board.pose_in_map[2]` is the authoritative board placement in the anchored
+  map and is shared with runtime initialization. It is not used as a substitute
+  for the map's trial-tuned height gate.
 - Moving the board, changing its face dimensions, or rebuilding the map
   invalidates the old pose. Re-anchor or resurvey, then repeat
   [rosbag validation](rosbag-validation.md).

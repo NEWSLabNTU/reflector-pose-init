@@ -19,34 +19,62 @@ board:
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
   width: 0.6
   height: 0.97
-  centre_height: 1.0
 
 detector:
   # VLP-32C reports calibrated reflectivity: 0-100 diffuse, 101-255 reserved
   # for retroreflectors. This threshold is a sensor contract, not a tuning.
   intensity_threshold: 240.0
-  # Below 3 m the board falls into the sparse lower elevation band, where the
-  # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
-  # third from the rest of the cluster. Measured in simulation, not guessed.
-  range_min: 3.0
-  range_max: 18.0
-  height_min: 0.5
-  height_max: 1.5
-
-  # Governed by across-ring spacing, not within-ring spacing.
-  cluster_tolerance: 0.05
-  cluster_min_points: 60
-
-  extent_tolerance: [0.8, 1.5]      # fraction of nominal
-  planarity_max_thickness: 0.08
-  verticality_max_dot: 0.25
-  centre_height_tolerance: 0.30
-
-  # Upper bound only: yaw, occlusion, and dropout legitimately reduce the
-  # return count, but nothing legitimately inflates it.
-  density_max_ratio: 1.4
-  density_check_enabled: true
   azimuth_step_rad: 0.0035          # 0.2 deg at 600 rpm / 10 Hz
+
+  runtime:
+    # These heights are in base_link. On this vehicle base_link is at the
+    # rear axle centre, so the floor is approximately -one wheel radius.
+    height_reference: base_link
+    floor_height_in_frame: -0.265
+    # Omit the centre gate's absolute value so it is derived from the shared
+    # board height in the anchored map plus the base_link floor offset. This
+    # assumes board.pose_in_map[2] uses the canonical floor datum; set an
+    # explicit value if a deployment uses another vertical datum.
+    board_centre_height: null
+    # Below 3 m the board falls into the sparse lower elevation band, where the
+    # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
+    # third from the rest of the cluster. Measured in simulation, not guessed.
+    range_min: 3.0
+    range_max: 18.0
+    height_min: 0.5
+    height_max: 1.5
+
+    # Governed by across-ring spacing, not within-ring spacing.
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+    extent_tolerance: [0.8, 1.5]      # fraction of nominal
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: true
+
+  map:
+    # The CLI levels the cloud so this frame's floor is z=0. The source PLY's
+    # arbitrary z origin never enters this gate.
+    height_reference: map_floor
+    floor_height_in_frame: 0.0
+    # This is map-local tuning, not the runtime base_link height. The fitted
+    # floor and board points in an aggregated PLY can carry bias.
+    board_centre_height: 1.0
+    range_min: 0.0
+    range_max: .inf
+    height_min: 0.5
+    height_max: 1.5
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+    extent_tolerance: [0.8, 1.5]      # fraction of nominal
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    # Merged maps do not have one sensor's expected return count.
+    density_max_ratio: 1.4
+    density_check_enabled: false
 
 anchor:
   floor_band: 0.3                   # metres above the lowest points to fit within

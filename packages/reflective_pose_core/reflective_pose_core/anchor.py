@@ -25,7 +25,7 @@ a detector bias cancels rather than presenting as a localization error.
 ROS-free. See docs/design/indoor_pcd_mapping_reflector_anchor.md §6.4.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional, Tuple
 
 import numpy as np
@@ -37,9 +37,13 @@ from .pointcloud_io import PointCloud
 
 @dataclass
 class AnchorParams:
-    """Anchoring inputs. Detection gates come from DetectorParams."""
+    """Map placement and floor-fit inputs.
 
-    board_centre_height: float = 1.075
+    Detection gates come from the map-specific ``DetectorParams`` resolved by
+    configuration. Keeping them out of this dataclass prevents the anchor
+    transform contract from accidentally becoming a second detector policy.
+    """
+
     board_width: float = 0.8
     board_height: float = 1.0
     # [x, y, z, roll, pitch, yaw], radians. This is shared with the runtime
@@ -67,38 +71,25 @@ class AnchorResult:
     n_points: int
 
 
-def detector_params_for_map(base: Optional[DetectorParams] = None) -> DetectorParams:
-    """Detection thresholds adjusted for a merged map rather than one scan.
+def detector_params_for_map(
+    map_params: Optional[DetectorParams] = None,
+) -> DetectorParams:
+    """Return a complete map policy for direct library callers.
 
-    Two gates are meaningless here and are turned off rather than retuned:
-
-    - **Range.** Distances in a map are measured from an arbitrary origin, not
-      from a sensor, so a range window rejects the board for no reason.
-    - **Density.** The expected return count assumes one scan from one
-      viewpoint. A map merges many, so the count is unbounded from above and
-      the gate would reject every real board.
-
-    Everything geometric — planarity, verticality, extent, mounting height —
-    still applies, and those are the gates that separate the board from the exit
-    signage anyway.
+    A supplied object is treated as an already-resolved map policy and copied
+    without importing any runtime values. The no-argument defaults disable the
+    two gates that require a sensor origin or a single scan. Configuration
+    users should prefer ``Config.map_detector`` so map height, clustering, and
+    geometry tuning is explicit in YAML.
     """
-    params = base or DetectorParams()
+    if map_params is not None:
+        return replace(map_params)
     return DetectorParams(
-        intensity_threshold=params.intensity_threshold,
         range_min=0.0,
         range_max=float("inf"),
-        height_min=params.height_min,
-        height_max=params.height_max,
-        cluster_tolerance=params.cluster_tolerance,
-        cluster_min_points=params.cluster_min_points,
-        board_width=params.board_width,
-        board_height=params.board_height,
-        board_centre_height=params.board_centre_height,
-        extent_tolerance=params.extent_tolerance,
-        planarity_max_thickness=params.planarity_max_thickness,
-        verticality_max_dot=params.verticality_max_dot,
-        centre_height_tolerance=params.centre_height_tolerance,
         density_check_enabled=False,
+        scan_count=1,
+        height_reference="map_floor",
     )
 
 
@@ -182,6 +173,10 @@ def anchor_cloud(
     one board, and picking between two would define the map frame off the wrong
     object — an error with no later symptom except that everything is shifted.
 
+    ``detector_params`` is the already-resolved map policy. If it is omitted,
+    ``detector_params_for_map`` supplies conservative direct-library defaults;
+    it never reaches into the runtime node's configuration.
+
     ``on_result``, if given, is called with ``(levelled_points, intensity,
     DetectResult, viewpoint)`` right after detection runs and before either
     outcome is decided — including on failure, when the raised ``ValueError``
@@ -213,7 +208,11 @@ def anchor_cloud(
     # and the trajectory may not be either.
     viewpoint = np.median(levelled, axis=0)
 
-    map_params = detector_params_for_map(detector_params)
+    map_params = (
+        detector_params_for_map()
+        if detector_params is None
+        else replace(detector_params)
+    )
     map_params.viewpoint = viewpoint
     result: DetectResult = detect_board(levelled, intensity, np.eye(4), map_params)
 

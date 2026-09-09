@@ -16,7 +16,6 @@ the file is also the stricter check, since it compares what was written down
 rather than what one particular reader made of it.
 """
 
-from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -54,7 +53,6 @@ def test_every_legacy_key_survives_the_port():
         "board_pose_in_map": config.board.pose_in_map,
         "board_width": config.board.width,
         "board_height": config.board.height,
-        "board_centre_height": config.board.centre_height,
         "input_topic": config.ros.input_topic,
         "sensor_frame": config.ros.sensor_frame,
         "base_frame": config.ros.base_frame,
@@ -72,18 +70,18 @@ def test_every_legacy_key_survives_the_port():
         "sigma_yaw_base": config.covariance.sigma_yaw_base,
         "covariance_safety_factor": config.covariance.safety_factor,
         "intensity_threshold": config.detector.intensity_threshold,
-        "range_min": config.detector.range_min,
-        "range_max": config.detector.range_max,
-        "height_min": config.detector.height_min,
-        "height_max": config.detector.height_max,
-        "cluster_tolerance": config.detector.cluster_tolerance,
-        "cluster_min_points": config.detector.cluster_min_points,
-        "extent_tolerance": config.detector.extent_tolerance,
-        "planarity_max_thickness": config.detector.planarity_max_thickness,
-        "verticality_max_dot": config.detector.verticality_max_dot,
-        "centre_height_tolerance": config.detector.centre_height_tolerance,
-        "density_max_ratio": config.detector.density_max_ratio,
-        "density_check_enabled": config.detector.density_check_enabled,
+        "range_min": config.detector.runtime.range_min,
+        "range_max": config.detector.runtime.range_max,
+        "height_min": config.detector.runtime.height_min,
+        "height_max": config.detector.runtime.height_max,
+        "cluster_tolerance": config.detector.runtime.cluster_tolerance,
+        "cluster_min_points": config.detector.runtime.cluster_min_points,
+        "extent_tolerance": config.detector.runtime.extent_tolerance,
+        "planarity_max_thickness": config.detector.runtime.planarity_max_thickness,
+        "verticality_max_dot": config.detector.runtime.verticality_max_dot,
+        "centre_height_tolerance": config.detector.runtime.centre_height_tolerance,
+        "density_max_ratio": config.detector.runtime.density_max_ratio,
+        "density_check_enabled": config.detector.runtime.density_check_enabled,
         "azimuth_step_rad": config.detector.azimuth_step_rad,
     }
 
@@ -101,7 +99,7 @@ def test_every_legacy_key_survives_the_port():
 def test_scan_count_tracks_the_node_accumulation():
     """The coupling the old flat file left to the caller to remember."""
     config = load_config(str(CANONICAL))
-    assert config.detector.scan_count == config.ros.accumulate_scans
+    assert config.runtime_detector.scan_count == config.ros.accumulate_scans
 
 
 def test_unknown_key_is_an_error(tmp_path):

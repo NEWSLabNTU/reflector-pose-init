@@ -15,6 +15,7 @@ from reflective_pose_core.anchor import (
     anchor_cloud,
     apply_transform,
     board_polygon_osm,
+    detector_params_for_map,
     fit_floor,
 )
 from reflective_pose_core.detector import Status
@@ -118,6 +119,26 @@ def test_anchoring_undoes_an_arbitrary_source_frame():
     assert abs(centre[0]) < 0.10
     assert abs(centre[1]) < 0.10
     assert centre[2] == pytest.approx(BOARD_CENTRE_HEIGHT, abs=0.15)
+
+
+def test_map_height_gate_is_invariant_to_source_frame_z_translation():
+    """Map heights are measured after fitting the source cloud's floor."""
+    map_params = detector_params_for_map()
+    map_params.height_min = 0.5
+    map_params.height_max = 1.7
+    map_params.board_centre_height = BOARD_CENTRE_HEIGHT
+    map_params.planarity_max_thickness = 0.08
+
+    for source_z in (0.0, 17.0):
+        result = anchor_cloud(
+            build_map_cloud(
+                source_pose=make_transform(
+                    rotation_z(0.4), [31.0, -9.0, source_z]
+                )
+            ),
+            detector_params=map_params,
+        )
+        assert result.detection is not None
 
 
 def test_anchoring_places_board_at_configured_pose():

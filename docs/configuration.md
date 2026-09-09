@@ -35,10 +35,14 @@ reads exactly like a threshold that had no effect.
 
 Two values are derived rather than repeated, because both have caused drift:
 
-- `board.width`, `board.height` and `board.centre_height` are written once and
-  fanned out to both the detector and the anchoring tool. The runtime pose guess
-  and the map it is checked against cannot disagree.
-- `detector.scan_count` follows `ros.accumulate_scans`. The expected return
+- `board.width`, `board.height` and `board.pose_in_map` are written once and
+  fanned out to both detector modes and the anchoring tool. The runtime pose
+  guess and the map it is checked against cannot disagree.
+- `detector.runtime` and `detector.map` are separate policies. Runtime heights
+  are measured in `base_link`; map heights are measured after the CLI fits and
+  levels the map floor. Their clustering, extent and planarity gates can be
+  tuned independently.
+- The runtime detector's `scan_count` follows `ros.accumulate_scans`. The expected return
   count scales with the number of stacked scans, so a node accumulating ten
   against a detector assuming one rejects every real board as ten times too
   dense.
@@ -52,29 +56,40 @@ Shared truth. Both the runtime node and the offline anchoring tool read it.
 | `pose_in_map` | `[0, 0, 1.3, 0, 0, 0]` | `[x, y, z, roll, pitch, yaw]`, radians, rotation `Rz(yaw) @ Ry(pitch) @ Rx(roll)` |
 | `width` | `0.6` | reflective face width, metres |
 | `height` | `0.97` | reflective face height, metres |
-| `centre_height` | `1.0` | expected centre height above the local floor, metres |
-
-`centre_height` and `pose_in_map[2]` are different things: the first is the
-physical mounting height the detector expects, the second is a map coordinate.
-Keep them equal for a floor-level map; differ deliberately only when the map
-frame carries an offset.
 
 ## detector
+
+The detector section has sensor-wide values and two independent gate profiles.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `intensity_threshold` | `240.0` | retroreflector band cutoff |
-| `range_min` / `range_max` | `3.0` / `18.0` | usable range, metres |
-| `height_min` / `height_max` | `0.5` / `1.5` | accepted candidate centre height |
-| `cluster_tolerance` | `0.05` | clustering distance, metres |
-| `cluster_min_points` | `60` | smallest cluster considered |
-| `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
-| `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
-| `verticality_max_dot` | `0.25` | how far off vertical the normal may be |
-| `centre_height_tolerance` | `0.30` | slack on `board.centre_height` |
-| `density_max_ratio` | `1.4` | upper bound on returns vs expected |
-| `density_check_enabled` | `true` | whether the density gate runs |
 | `azimuth_step_rad` | `0.0035` | 0.2 deg at 600 rpm / 10 Hz |
+
+Both `runtime` and `map` contain `range_min`, `range_max`, `height_min`,
+`height_max`, `board_centre_height`, `cluster_tolerance`,
+`cluster_min_points`, `extent_tolerance`, `planarity_max_thickness`,
+`verticality_max_dot`, `centre_height_tolerance`, `density_max_ratio`, and
+`density_check_enabled`.
+
+`runtime.height_reference` is `base_link`. Set `runtime.floor_height_in_frame`
+to the floor's z coordinate in `base_link`; for this vehicle, the rear-axle
+`base_link` convention makes it approximately `-wheel_radius` (`-0.265 m`).
+When `runtime.board_centre_height` is `null`, the loader derives it as
+`board.pose_in_map[2] + floor_height_in_frame`. This accounts for the wheel
+radius without pretending every vehicle's `base_link` is at its axle. This
+shortcut assumes the canonical map z datum is the floor directly below the
+board; set an explicit runtime centre height when using another datum.
+
+`map.height_reference` is `map_floor`. The CLI first fits the floor and levels
+it to z=0, so `map.height_min`, `map.height_max`, and
+`map.board_centre_height` are map-local tuning values. The source PLY's
+arbitrary z origin is not used. `map.range_max` is infinite and density is off
+by default because a merged map has no single sensor origin or scan count.
+
+`height_min` and `height_max` filter individual reflective points in the named
+height frame. `board_centre_height` is a later candidate-centre gate; it does
+not change the frame or the shared board pose.
 
 Three of these are measurements rather than tunings, and the comments in the
 YAML say so:
@@ -82,11 +97,11 @@ YAML say so:
 - **`intensity_threshold: 240`** — the VLP-32C reports calibrated reflectivity,
   0-100 diffuse and 101-255 reserved for retroreflectors. This is a sensor
   contract.
-- **`range_min: 3.0`** — below 3 m the board falls into the sparse lower
+- **`runtime.range_min: 3.0`** — below 3 m the board falls into the sparse lower
   elevation band, where the 9.4 degree gap between the -25.0 and -15.6 degree
   beams disconnects its bottom third from the rest of the cluster. Measured in
   simulation.
-- **`density_max_ratio`** — an upper bound only. Yaw, occlusion and dropout all
+- **`runtime.density_max_ratio`** — an upper bound only. Yaw, occlusion and dropout all
   legitimately reduce the return count; nothing legitimately inflates it.
 
 ## anchor

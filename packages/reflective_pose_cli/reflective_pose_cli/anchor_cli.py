@@ -115,10 +115,10 @@ only the centroid label. Nothing the old picture contained is lost.
 The gates that produced those verdicts
 --------------------------------------
 ``param_names``         (T,) unicode — every numeric scalar of the
-                        ``DetectorParams`` this run used, **after**
-                        ``detector_params_for_map`` relaxed range and density
+                        resolved map-policy ``DetectorParams`` this run used
 ``param_values``        (T,) float64 — parallel to ``param_names``. Booleans are
-                        0.0 / 1.0; ``range_max`` is ``inf`` for a map cloud.
+                        0.0 / 1.0; these are the resolved map-policy values,
+                        not runtime-node thresholds.
 
 The anchoring result (NaN when anchoring failed)
 ------------------------------------------------
@@ -139,7 +139,6 @@ from reflective_pose_core.anchor import (
     anchored_board_centre,
     apply_transform,
     board_polygon_osm,
-    detector_params_for_map,
     transform_yaml,
 )
 from reflective_pose_core.config import default_config_path, load_config
@@ -417,10 +416,10 @@ def write_debug_dump(
     failure path — which is the path the picture is wanted on.
     """
     result = captured["result"]
-    # The gates the detector actually ran with: anchoring relaxes range and
-    # density for a merged cloud, so dumping the file's values would show a
-    # viewer limits that were never applied.
-    params = detector_params_for_map(detector_params)
+    # ``detector_params`` is already the resolved map policy. Do not derive it
+    # from the runtime policy here: map height, clustering, and planarity are
+    # intentionally independent tuning surfaces.
+    params = detector_params
 
     names, values = _numeric_params(params)
     nan = float("nan")
@@ -472,7 +471,7 @@ def main(argv=None) -> int:
         print(f"error: cannot load config {args.config}: {error}", file=sys.stderr)
         return 2
     params = config.anchor
-    detector_params = config.detector
+    detector_params = config.map_detector
 
     cloud = read_cloud(args.cloud)
     print(f"read {len(cloud)} points from {args.cloud}")

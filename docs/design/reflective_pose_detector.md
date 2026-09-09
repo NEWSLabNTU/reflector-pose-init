@@ -92,20 +92,35 @@ board:                        # shared truth: runtime AND offline anchoring
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]   # x y z roll pitch yaw, radians
   width: 0.6
   height: 0.97
-  centre_height: 1.0
 
 detector:                     # core
   intensity_threshold: 240.0
-  range_min: 3.0
-  range_max: 18.0
-  cluster_tolerance: 0.05
-  cluster_min_points: 60
-  extent_tolerance: [0.8, 1.5]
-  planarity_max_thickness: 0.08
-  verticality_max_dot: 0.25
-  density_max_ratio: 1.4
-  density_check_enabled: true
   azimuth_step_rad: 0.0035
+  runtime:                     # heights in base_link
+    height_reference: base_link
+    floor_height_in_frame: -0.265
+    board_centre_height: null  # derive from board pose plus floor offset
+    range_min: 3.0
+    range_max: 18.0
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    density_max_ratio: 1.4
+    density_check_enabled: true
+  map:                        # heights in the fitted map floor frame
+    height_reference: map_floor
+    board_centre_height: 1.0
+    range_min: 0.0
+    range_max: .inf
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    density_max_ratio: 1.4
+    density_check_enabled: false
 
 anchor:                       # core, offline path
   # floor fit and anchoring inputs

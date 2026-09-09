@@ -10,16 +10,18 @@ Two couplings are enforced here rather than left to each caller, because both
 have already been the subject of a comment warning about drift:
 
 ``board:`` is shared truth. ``DetectorParams`` and ``AnchorParams`` each carry
-their own copy of the board's width, height and centre height, and the runtime
-node and the offline anchoring tool must agree on the pose. They are written
-once under ``board:`` and fanned out from there.
+their own copy of the board's width and height, and the runtime node and the
+offline anchoring tool must agree on the pose. They are written once under
+``board:`` and fanned out from there. Height and gate thresholds live in
+independent runtime and map policies because the two paths use different
+height frames and point densities.
 
 ``ros.accumulate_scans`` feeds ``DetectorParams.scan_count``. The expected
 return count scales with the number of stacked scans, so a node accumulating ten
 against a detector assuming one rejects every real board as ten times too dense.
 """
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -37,14 +39,143 @@ SECTIONS = ("board", "detector", "anchor", "covariance", "ros", "autoware")
 
 @dataclass
 class BoardParams:
-    """The board itself. Shared by the runtime and offline paths."""
+    """The board contract shared by the runtime and offline paths.
+
+    ``pose_in_map`` is the authoritative placement of the board centre. The
+    detector's height gate is deliberately not part of this contract: runtime
+    and map clouds use different height frames and therefore resolve their own
+    expected centre height.
+    """
 
     pose_in_map: Tuple[float, float, float, float, float, float] = (
         0.0, 0.0, 1.300, 0.0, 0.0, 0.0
     )
     width: float = 0.6
     height: float = 0.97
-    centre_height: float = 1.0
+
+
+@dataclass
+class DetectionPolicy:
+    """Mode-specific detector gates.
+
+    The same board dimensions are injected into both resolved
+    :class:`DetectorParams` objects. These values are intentionally separate:
+    runtime points are filtered in ``base_link`` while map points are filtered
+    after levelling against the fitted floor.
+    """
+
+    range_min: float = 3.0
+    range_max: float = 18.0
+    height_min: float = 0.4
+    height_max: float = 1.8
+    board_centre_height: Optional[float] = 1.075
+    cluster_tolerance: float = 0.30
+    cluster_min_points: int = 20
+    extent_tolerance: Tuple[float, float] = (0.6, 1.2)
+    planarity_max_thickness: float = 0.03
+    verticality_max_dot: float = 0.25
+    centre_height_tolerance: float = 0.30
+    density_max_ratio: float = 1.4
+    density_check_enabled: bool = True
+
+    # Metadata for the frame contract. ``floor_height_in_frame`` is the z
+    # coordinate of the physical floor in the height frame. It is used only
+    # when board_centre_height is omitted and the shared map pose supplies the
+    # board's height above that floor.
+    height_reference: str = "base_link"
+    floor_height_in_frame: float = 0.0
+
+
+def _default_map_policy() -> DetectionPolicy:
+    """Defaults for a merged map, whose origin is not a sensor."""
+    return DetectionPolicy(
+        range_min=0.0,
+        range_max=float("inf"),
+        height_reference="map_floor",
+        density_check_enabled=False,
+    )
+
+
+@dataclass
+class DetectorConfig:
+    """Shared detector inputs plus independent runtime/map policies."""
+
+    # Sensor contracts are common to both modes.
+    intensity_threshold: float = 110.0
+    azimuth_step_rad: float = 0.0035
+    mean_elevation_step_rad: float = 0.0225
+    runtime: DetectionPolicy = field(default_factory=DetectionPolicy)
+    map_policy: DetectionPolicy = field(default_factory=_default_map_policy)
+
+    @staticmethod
+    def _resolve(
+        policy: DetectionPolicy, board: BoardParams, scan_count: int,
+        intensity_threshold: float, azimuth_step_rad: float,
+        mean_elevation_step_rad: float, expected_height_reference: str,
+    ) -> DetectorParams:
+        centre_height = policy.board_centre_height
+        if centre_height is None:
+            # This derivation is valid because the map contract puts its
+            # origin on the floor directly below the board. If a deployment
+            # uses another vertical datum, it must set board_centre_height
+            # explicitly instead of relying on this shortcut.
+            # Add the floor's coordinate in the selected height frame
+            # (negative wheel radius for base_link).
+            centre_height = board.pose_in_map[2] + policy.floor_height_in_frame
+
+        if policy.height_reference != expected_height_reference:
+            raise ValueError(
+                f"detector policy for {expected_height_reference} must use "
+                f"height_reference={expected_height_reference!r}, got "
+                f"{policy.height_reference!r}"
+            )
+
+        return DetectorParams(
+            intensity_threshold=intensity_threshold,
+            range_min=policy.range_min,
+            range_max=policy.range_max,
+            height_min=policy.height_min,
+            height_max=policy.height_max,
+            cluster_tolerance=policy.cluster_tolerance,
+            cluster_min_points=policy.cluster_min_points,
+            board_width=board.width,
+            board_height=board.height,
+            board_centre_height=float(centre_height),
+            extent_tolerance=tuple(policy.extent_tolerance),
+            planarity_max_thickness=policy.planarity_max_thickness,
+            verticality_max_dot=policy.verticality_max_dot,
+            centre_height_tolerance=policy.centre_height_tolerance,
+            density_max_ratio=policy.density_max_ratio,
+            density_check_enabled=policy.density_check_enabled,
+            azimuth_step_rad=azimuth_step_rad,
+            mean_elevation_step_rad=mean_elevation_step_rad,
+            scan_count=scan_count,
+            height_reference=policy.height_reference,
+        )
+
+    def params_for_runtime(self, board: BoardParams, scan_count: int) -> DetectorParams:
+        """Resolve the policy whose heights are measured in ``base_link``."""
+        return self._resolve(
+            self.runtime,
+            board,
+            scan_count,
+            self.intensity_threshold,
+            self.azimuth_step_rad,
+            self.mean_elevation_step_rad,
+            "base_link",
+        )
+
+    def params_for_map(self, board: BoardParams) -> DetectorParams:
+        """Resolve the policy whose heights are measured from the fitted floor."""
+        return self._resolve(
+            self.map_policy,
+            board,
+            1,
+            self.intensity_threshold,
+            self.azimuth_step_rad,
+            self.mean_elevation_step_rad,
+            "map_floor",
+        )
 
 
 @dataclass
@@ -94,7 +225,7 @@ class Config:
     """Everything the five packages read, from one file."""
 
     board: BoardParams = field(default_factory=BoardParams)
-    detector: DetectorParams = field(default_factory=DetectorParams)
+    detector: DetectorConfig = field(default_factory=DetectorConfig)
     anchor: AnchorParams = field(default_factory=AnchorParams)
     # Its own section rather than a corner of `autoware:`, because the
     # covariance is a property of the detection and is computed in
@@ -103,6 +234,16 @@ class Config:
     covariance: CovarianceParams = field(default_factory=CovarianceParams)
     ros: RosParams = field(default_factory=RosParams)
     autoware: AutowareParams = field(default_factory=AutowareParams)
+
+    @property
+    def runtime_detector(self) -> DetectorParams:
+        """The fully resolved runtime detector parameters."""
+        return self.detector.params_for_runtime(self.board, self.ros.accumulate_scans)
+
+    @property
+    def map_detector(self) -> DetectorParams:
+        """The fully resolved map-anchoring detector parameters."""
+        return self.detector.params_for_map(self.board)
 
 
 def default_config_path() -> str:
@@ -171,42 +312,57 @@ def load_config(path: Optional[str] = None) -> Config:
     _reject_unknown(resolved, "board", board_values, BoardParams)
     _reject_unknown(resolved, "ros", ros_values, RosParams)
     _reject_unknown(resolved, "autoware", autoware_values, AutowareParams)
-    _reject_unknown(resolved, "detector", detector_values, DetectorParams)
     _reject_unknown(resolved, "anchor", anchor_values, AnchorParams)
     _reject_unknown(resolved, "covariance", covariance_values, CovarianceParams)
+
+    runtime_values = dict(detector_values.pop("runtime", {}) or {})
+    map_values = dict(detector_values.pop("map", {}) or {})
+    common_names = {
+        "intensity_threshold",
+        "azimuth_step_rad",
+        "mean_elevation_step_rad",
+    }
+    unknown_common = set(detector_values) - common_names
+    if unknown_common:
+        raise ValueError(
+            f"{resolved}: unknown key(s) in 'detector': "
+            f"{sorted(unknown_common)}"
+        )
+    _reject_unknown(resolved, "detector.runtime", runtime_values, DetectionPolicy)
+    _reject_unknown(resolved, "detector.map", map_values, DetectionPolicy)
 
     board = _build_board(resolved, board_values)
     ros = RosParams(**_select(ros_values, RosParams))
     autoware = AutowareParams(**_select(autoware_values, AutowareParams))
 
-    if "extent_tolerance" in detector_values:
-        detector_values["extent_tolerance"] = tuple(detector_values["extent_tolerance"])
+    for values in (runtime_values, map_values):
+        if "extent_tolerance" in values:
+            values["extent_tolerance"] = tuple(values["extent_tolerance"])
 
-    # board: fans out. Both dataclasses carry their own copy of the geometry;
-    # this is the single place that decides what those copies contain.
-    detector_values.update(
-        board_width=board.width,
-        board_height=board.height,
-        board_centre_height=board.centre_height,
-        # See the module docstring: this must track the node's accumulation.
-        scan_count=ros.accumulate_scans,
+    detector_kwargs = _select(detector_values, DetectorConfig)
+    detector_kwargs["runtime"] = DetectionPolicy(
+        **_select(runtime_values, DetectionPolicy)
     )
+    detector_kwargs["map_policy"] = replace(
+        _default_map_policy(), **_select(map_values, DetectionPolicy)
+    )
+    detector_config = DetectorConfig(**detector_kwargs)
+    # Resolve both modes while loading so a frame mismatch fails at startup,
+    # before either a ROS node or the CLI can run with a mislabeled height gate.
+    detector_config.params_for_runtime(board, ros.accumulate_scans)
+    detector_config.params_for_map(board)
+
+    # board: fans out only the physical shape and authoritative placement.
+    # Mode-specific height and gate settings stay in their own policies.
     anchor_values.update(
         board_width=board.width,
         board_height=board.height,
-        board_centre_height=board.centre_height,
         board_pose_in_map=board.pose_in_map,
     )
 
-    # viewpoint and elevation_table_rad are runtime objects, not config: the
-    # anchoring tool supplies a viewpoint, and the beam table comes from the
-    # sensor calibration. Neither is settable from the file.
-    for name in ("viewpoint", "elevation_table_rad"):
-        detector_values.pop(name, None)
-
     return Config(
         board=board,
-        detector=DetectorParams(**_select(detector_values, DetectorParams)),
+        detector=detector_config,
         anchor=AnchorParams(**_select(anchor_values, AnchorParams)),
         covariance=CovarianceParams(**_select(covariance_values, CovarianceParams)),
         ros=ros,

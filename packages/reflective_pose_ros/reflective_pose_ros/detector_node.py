@@ -93,7 +93,11 @@ class BoardDetectorNode(Node):
         path = self.get_parameter("config_file").value or None
 
         self._config = load_config(path)
-        self._detector_params = self._config.detector
+        # Resolve the runtime policy explicitly. The map CLI resolves a
+        # separate policy from the same board contract; sharing a flat
+        # DetectorParams here would make its base_link height and scan-density
+        # gates leak into offline map anchoring.
+        self._detector_params = self._config.runtime_detector
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
         self._accumulate_scans = int(self._config.ros.accumulate_scans)

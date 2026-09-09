@@ -75,6 +75,9 @@ class DetectorParams:
     # so a node accumulating 10 scans and a detector assuming 1 would reject
     # every real board as ten times too dense.
     scan_count: int = 1
+    # Metadata for the height gate's coordinate frame. The transform supplied
+    # to detect_board must map sensor points into this frame.
+    height_reference: str = "base_link"
 
     # Stage 4
     edge_margin_scale: float = 1.5  # multiples of local point spacing
@@ -361,7 +364,7 @@ def _evaluate_cluster(
 def detect_board(
     points: np.ndarray,
     intensity: np.ndarray,
-    transform_base_sensor: np.ndarray,
+    transform_height_frame_sensor: np.ndarray,
     params: Optional[DetectorParams] = None,
 ) -> DetectResult:
     """Detect the retroreflective board in one accumulated scan.
@@ -371,8 +374,11 @@ def detect_board(
         intensity: (N,) calibrated reflectivity. On a VLP-32C, 0-100 is diffuse
             and 101-255 is reserved for retroreflectors, which is why the
             intensity gate is a sensor contract rather than a tuned threshold.
-        transform_base_sensor: 4x4 ``base_link <- sensor`` transform. Needed for
-            the height gate and for the gravity-up direction.
+        transform_height_frame_sensor: 4x4 transform from the sensor frame to
+            the frame used by the height policy. Runtime callers pass
+            ``base_link <- sensor``. Map callers pass identity only after the
+            cloud has been gravity-levelled and translated so its fitted floor
+            is z=0.
         params: thresholds; defaults are the shipped configuration.
 
     Returns:
@@ -390,19 +396,19 @@ def detect_board(
     if len(points) != len(intensity):
         raise ValueError("points and intensity must have the same length")
 
-    rotation = transform_base_sensor[:3, :3]
+    rotation = transform_height_frame_sensor[:3, :3]
     # Gravity-up expressed in the sensor frame.
     up_world = rotation.T @ np.array([0.0, 0.0, 1.0])
     up_world = up_world / np.linalg.norm(up_world)
 
     def height_of(p: np.ndarray) -> np.ndarray:
-        return (rotation @ p + transform_base_sensor[:3, 3])[..., 2]
+        return (rotation @ p + transform_height_frame_sensor[:3, 3])[..., 2]
 
     if len(points) == 0:
         return DetectResult(Status.NO_CANDIDATE)
 
     ranges = np.linalg.norm(points, axis=1)
-    heights = _transform_points(points, transform_base_sensor)[:, 2]
+    heights = _transform_points(points, transform_height_frame_sensor)[:, 2]
 
     keep = intensity >= params.intensity_threshold
     keep &= (ranges >= params.range_min) & (ranges <= params.range_max)
