@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>reflective_pose_cli</name>
+  <version>0.1.0</version>
+  <description>
+    Offline terminal tools: anchor a finished SLAM cloud to the retroreflective
+    board and write the map directory. ROS-free on purpose — the debug flag
+    that used to publish RViz topics now writes a .npz that
+    reflective_pose_ros's anchor_debug_viewer replays, so a person with a .pcd
+    and a laptop needs neither ROS nor Autoware installed.
+  </description>
+  <maintainer email="dev@golfcart.org">Golf Cart Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- The whole runtime dependency list. rclpy and any *_msgs package belong
+       in reflective_pose_ros or _autoware; adding one here defeats the reason
+       this package exists. -->
+  <depend>python3-numpy</depend>
+  <depend>reflective_pose_core</depend>
+
+  <!-- The tests build their map cloud from synthetic VLP-32C scans. Test only;
+       it must never appear as <depend>. -->
+  <test_depend>reflective_pose_sim</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

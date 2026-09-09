@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!--
+  Cold-start localization from the retroreflective board, as an Autoware
+  deployment runs it: the generic detector node and the Autoware handoff, wired
+  together on one topic and reading one configuration file.
+
+  Off by default outdoors, and only against a map anchored to the board.
+
+  The two nodes were one before the package split. They are separate processes
+  now so that the detector can run in a stack that is not Autoware; this launch
+  file is the place that puts them back together.
+-->
+<launch>
+  <!-- Empty means reflective_pose_core.default_config_path(): the environment
+       override, then the installed package data, then the checkout. Both nodes
+       must be given the same file - board: is shared truth, and
+       ros.accumulate_scans feeds the detector's expected return count. -->
+  <arg name="config_file" default=""/>
+
+  <arg name="namespace" default="/localization"/>
+  <arg name="detector_name" default="board_detector"/>
+  <!-- Must agree with the two node names above: it is the detector's
+       ~/board_pose resolved. Named once here so a rename cannot silently
+       disconnect the pair. -->
+  <arg name="board_pose_topic"
+       default="$(var namespace)/$(var detector_name)/board_pose"/>
+  <arg name="output" default="screen"/>
+
+  <group>
+    <push-ros-namespace namespace="$(var namespace)"/>
+
+    <!-- Detects. Knows nothing about Autoware. -->
+    <node pkg="reflective_pose_ros" exec="board_detector_node"
+          name="$(var detector_name)" output="$(var output)">
+      <param name="config_file" value="$(var config_file)"/>
+      <remap from="~/board_pose" to="$(var board_pose_topic)"/>
+    </node>
+
+    <!-- Decides: speed gate, attempt budget, fallback policy, service call. -->
+    <node pkg="reflective_pose_autoware" exec="board_pose_initializer"
+          name="board_pose_initializer" output="$(var output)">
+      <param name="config_file" value="$(var config_file)"/>
+      <remap from="/localization/board_detector/board_pose"
+             to="$(var board_pose_topic)"/>
+    </node>
+  </group>
+</launch>

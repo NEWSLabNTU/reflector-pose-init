@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reflective_pose_sim"
+version = "0.1.0"
+description = "Synthetic VLP-32C scans and indoor scenes for the reflective board detector"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+maintainers = [{ name = "Golf Cart Team", email = "dev@golfcart.org" }]
+dependencies = [
+    "numpy",
+    "reflective_pose_core",
+]
+
+[tool.setuptools]
+packages = ["reflective_pose_sim"]
+zip-safe = true

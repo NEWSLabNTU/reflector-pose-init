@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>reflective_pose_core</name>
+  <version>0.1.0</version>
+  <description>
+    Retroreflective board detection, map anchoring and the shared configuration
+    schema. Geometry over a point cloud: no ROS, no Autoware, no messages. The
+    package exists so that detecting a board does not require installing a
+    vehicle stack, and so a stack that is not Autoware can use the detector
+    unmodified.
+  </description>
+  <maintainer email="dev@golfcart.org">Golf Cart Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- The tests that drive the detector through the VLP-32C simulator live in
+       reflective_pose_sim, not here: sim depends on core, so core cannot
+       test_depend on sim without making a cycle colcon refuses to order. They
+       test core through sim, so they belong on sim's side of that edge. -->
+
+  <!-- The whole dependency list. Anything added here that pulls in rclpy or a
+       message package belongs in reflective_pose_ros or _autoware instead. -->
+  <depend>python3-numpy</depend>
+  <depend>python3-yaml</depend>
+
+  <!-- reflective_pose_sim drives the tests with synthetic VLP-32C scans. It is
+       a test dependency only; it must never appear as <depend>. -->
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

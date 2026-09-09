@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<!--
+  Desk test: synthetic VLP-32C scans into the detector, no hardware and no
+  localization stack. The detector publishes ~/board_pose whether or not
+  anything is listening, so the whole path — subscription, TF lookup,
+  accumulation, detection, pose composition — is exercisable standalone. The
+  old dry_run switch is gone with the service call it used to suppress.
+-->
+<launch>
+  <arg name="scene" default="board"/>            <!-- board | distractors | two_boards -->
+  <arg name="range_m" default="6.0"/>
+  <arg name="yaw_deg" default="0.0"/>
+  <arg name="blooming" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="config_file"
+       default="$(find-pkg-share reflective_pose_ros)/config/reflective_pose.yaml"/>
+
+  <node pkg="reflective_pose_ros" exec="board_scene_publisher"
+        name="board_scene_publisher" output="screen">
+    <param name="scene" value="$(var scene)"/>
+    <param name="range_m" value="$(var range_m)"/>
+    <param name="yaw_deg" value="$(var yaw_deg)"/>
+    <param name="blooming" value="$(var blooming)"/>
+  </node>
+
+  <include file="$(find-pkg-share reflective_pose_ros)/launch/board_detector.launch.xml">
+    <arg name="config_file" value="$(var config_file)"/>
+  </include>
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share reflective_pose_ros)/rviz/board_detector.rviz"/>
+</launch>

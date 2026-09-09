@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>reflective_pose_sim</name>
+  <version>0.1.0</version>
+  <description>
+    Synthetic VLP-32C scan generator and indoor scenes for the reflective board
+    detector. ROS-free: a test and development dependency only, never on the
+    vehicle runtime path.
+  </description>
+  <maintainer email="dev@golfcart.org">Golf Cart Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>python3-numpy</depend>
+  <depend>reflective_pose_core</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

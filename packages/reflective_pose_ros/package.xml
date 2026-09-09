@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>reflective_pose_ros</name>
+  <version>0.1.0</version>
+  <description>
+    ROS node that detects a retroreflective board in a LiDAR scan and publishes
+    the vehicle pose it implies, with launch files, RViz configs, and a viewer
+    for the offline anchoring tool's debug dumps.
+
+    Generic on purpose: it detects and publishes, and knows nothing about what
+    consumes the pose. The bridge to a particular localization stack is a
+    separate package, and that is the only reason this one names no such stack
+    below.
+  </description>
+  <maintainer email="dev@golfcart.org">Golf Cart Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>python3-numpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>geometry_msgs</depend>
+  <!-- Optional motion guard: ros.twist_topic accepts either type. -->
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>reflective_pose_core</depend>
+
+  <!-- board_scene_publisher only; the detector node never imports it. -->
+  <exec_depend>reflective_pose_sim</exec_depend>
+
+  <test_depend>builtin_interfaces</test_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

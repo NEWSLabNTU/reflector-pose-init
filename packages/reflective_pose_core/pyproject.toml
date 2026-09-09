@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reflective_pose_core"
+version = "0.1.0"
+description = "Retroreflective board detection and map anchoring, without ROS"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+maintainers = [{ name = "Golf Cart Team", email = "dev@golfcart.org" }]
+dependencies = [
+    "numpy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# reflective_pose_sim is deliberately NOT listed here as a resolvable
+# requirement: it is a sibling package in this repository, not something pip
+# can fetch. Install it from packages/reflective_pose_sim to run the tests that
+# need synthetic scans. It is never a runtime dependency -- 500-odd lines of
+# scan generation must not ship to the vehicle inside the library.
+test = ["pytest"]
+
+[tool.setuptools]
+# Explicit, so a stray directory beside the package is never picked up.
+packages = ["reflective_pose_core"]
+
+[tool.setuptools.package-data]
+# The canonical config travels with the code; default_config_path() resolves
+# to it when $REFLECTIVE_POSE_CONFIG is unset.
+reflective_pose_core = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

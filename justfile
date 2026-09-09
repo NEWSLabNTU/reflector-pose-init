@@ -19,12 +19,33 @@ fake-tf:
         --frame-id base_link \
         --child-frame-id {{lidar_frame_id}}
 
+# The detector alone. Publishes ~/board_pose; calls no service, so it is safe
+# against a running stack. This is what `dry_run:=true` used to mean.
 launch:
     #!/usr/bin/env bash
-    ros2 launch golfcart_board_initializer board_initializer.launch.xml \
-        dry_run:=true \
+    ros2 launch reflective_pose_ros board_detector.launch.xml \
+        input_topic:={{lidar_topic}}
+
+# Detector plus the Autoware handoff. This one CALLS /localization/initialize.
+launch-autoware:
+    #!/usr/bin/env bash
+    ros2 launch reflective_pose_autoware board_pose_initializer.launch.xml \
         input_topic:={{lidar_topic}}
 
 rviz:
     #!/usr/bin/env bash
-    rviz2 -d rviz/board_initializer.rviz
+    rviz2 -d packages/reflective_pose_ros/rviz/board_detector.rviz
+
+# Every package's tests, without a ROS workspace: the three ROS-free packages
+# need only PYTHONPATH, the two ROS ones need /opt/ros sourced.
+test:
+    #!/usr/bin/env bash
+    set -e
+    root="$(pwd)/packages"
+    export PYTHONPATH="$root/reflective_pose_core:$root/reflective_pose_sim:$root/reflective_pose_cli:$root/reflective_pose_ros:$root/reflective_pose_autoware:${PYTHONPATH:-}"
+    for pkg in core sim cli ros autoware; do
+        d="$root/reflective_pose_$pkg"
+        ls "$d"/test/*.py >/dev/null 2>&1 || { printf '%-26s (no tests)\n' "$pkg"; continue; }
+        printf '%-26s ' "$pkg"
+        (cd "$d" && python3 -m pytest test -q 2>&1 | tail -1)
+    done

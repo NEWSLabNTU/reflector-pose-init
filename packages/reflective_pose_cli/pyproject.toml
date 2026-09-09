@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reflective_pose_cli"
+version = "0.1.0"
+description = "Offline terminal tools for the reflective board detector, without ROS"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+maintainers = [{ name = "Golf Cart Team", email = "dev@golfcart.org" }]
+dependencies = [
+    "numpy",
+    "reflective_pose_core",
+]
+
+[project.optional-dependencies]
+# reflective_pose_sim is not listed as a resolvable requirement: it is a
+# sibling package in this repository, not something pip can fetch. Install it
+# from packages/reflective_pose_sim to run the tests, which build their map
+# cloud out of synthetic scans.
+test = ["pytest"]
+
+[project.scripts]
+anchor-map-to-board = "reflective_pose_cli.anchor_cli:main"
+
+[tool.setuptools]
+# Explicit, so a stray directory beside the package is never picked up.
+packages = ["reflective_pose_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

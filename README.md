@@ -1,42 +1,86 @@
-# golfcart_board_initializer
+# reflective_pose_detector
 
-Cold-start localization indoors from a retroreflective board, replacing GNSS as
-the initial-pose source.
+Cold-start localization from a retroreflective board: detect a board of known
+size and position in a LiDAR scan, and derive the sensor's pose in the map.
 
-Design: [docs/design/board_pose_initializer.md](../../../docs/design/board_pose_initializer.md)
-Phase: [docs/roadmaps/3-indoor-e-board-initializer.md](../../../docs/roadmaps/3-indoor-e-board-initializer.md)
+Design: [docs/design/reflective_pose_detector.md](docs/design/reflective_pose_detector.md)
+Phase: [docs/roadmaps/1-package-split.md](docs/roadmaps/1-package-split.md)
 
-The node detects the board in an accumulated stationary scan, composes the
-vehicle pose in the map frame, and calls `/localization/initialize` with
-`method=AUTO` — the board supplies a guess and NDT align refines it.
+Self-contained. The detector and the offline tools install and run with no ROS
+on the machine at all:
 
-This package is a one-shot cold-start initializer, not a continuous localizer.
-It must be started while the cart can see its one known board and is stationary.
+```bash
+pip install -e packages/reflective_pose_core -e packages/reflective_pose_cli
+anchor-map-to-board cloud.pcd -o map/ --dry-run
+```
 
-## Layout
+## Packages
 
-| Path | Role |
-|------|------|
-| `golfcart_board_initializer/detector.py` | Detection. Pure numpy, no `rclpy`. |
-| `golfcart_board_initializer/geometry.py` | Pose composition and covariance. Pure numpy. |
-| `golfcart_board_initializer/vlp32.py` | Beam table, read from the Nebula calibration with an embedded fallback. |
-| `golfcart_board_initializer/anchor.py` | Offline map anchoring. Pure numpy. |
-| `golfcart_board_initializer/pointcloud_io.py` | PLY and PCD, intensity preserved. Pure numpy. |
-| `golfcart_board_initializer/simulation/` | Synthetic VLP-32C scans and scenes. |
-| `golfcart_board_initializer/node.py` | ROS wiring, state machine, diagnostics. |
-| `golfcart_board_initializer/scene_publisher.py` | Publishes synthetic scans for desk testing. |
-| `golfcart_board_initializer/debug_viz.py` | Marker/cloud builders shared by the live node and `anchor_cli --rviz`. |
-| `rviz/board_initializer.rviz` | RViz layout for the live/simulated-scene debug topics. |
-| `rviz/anchor_debug.rviz` | RViz layout for `anchor_map_to_board --rviz`. |
+| Package | Role | Needs ROS | Needs Autoware |
+|---|---|---|---|
+| `reflective_pose_core` | detector, map anchoring, geometry, point-cloud IO, config | no | no |
+| `reflective_pose_sim` | VLP-32C scan simulator and test scenes | no | no |
+| `reflective_pose_cli` | `anchor-map-to-board` | no | no |
+| `reflective_pose_ros` | detector node, launch, RViz, debug viewer | yes | no |
+| `reflective_pose_autoware` | gates on velocity, calls `/localization/initialize` | yes | yes |
 
-`detector.py` and `geometry.py` import no ROS. That is what lets the tests run
-with nothing installed, and it lets the offline map-anchoring step share the code
-that runs at runtime.
+The node is split on a detect/decide seam. `reflective_pose_ros` detects and
+publishes `~/board_pose`; it knows nothing about what anyone does with that
+pose. `reflective_pose_autoware` decides — when it is safe to initialize, how
+many attempts to spend, what happens on failure — and makes the service call.
+That is why a non-Autoware stack can run the detector unmodified.
+
+## Configuration
+
+One file, `packages/reflective_pose_core/reflective_pose_core/data/reflective_pose.yaml`,
+in five sections: `board`, `detector`, `anchor`, `covariance`, `ros`,
+`autoware`. Each package reads its own section plus `board`, which is shared
+truth so the runtime pose guess and the offline map anchoring cannot drift
+apart.
+
+Both ROS nodes declare exactly one parameter, `config_file`. Empty means the
+packaged default.
+
+`reflective_pose_ros` installs a copy of that file to its `share/` for launch
+files to reference; `test_config_copy.py` asserts the two are byte-identical, so
+the copy cannot drift.
+
+## Running it
+
+```bash
+# detector only - publishes ~/board_pose, calls no service
+ros2 launch reflective_pose_ros board_detector.launch.xml
+
+# detector + Autoware handoff - CALLS /localization/initialize
+ros2 launch reflective_pose_autoware board_pose_initializer.launch.xml
+
+# no hardware: synthetic scans on a desk
+ros2 run reflective_pose_ros board_scene_publisher
+```
+
+Offline map anchoring, and inspecting a failure:
+
+```bash
+anchor-map-to-board cloud.pcd -o map/ --dump-debug /tmp/anchor.npz
+ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
+```
+
+The CLI has no ROS dependency, so the picture is drawn by a separate viewer in
+the ROS package rather than by the CLI itself.
+
+## Tests
+
+`just test` runs all five suites. The three ROS-free packages need only
+`PYTHONPATH`; the two ROS ones need `/opt/ros` sourced.
+
+The tests that drive the detector through the simulator live in
+`reflective_pose_sim`, not in `core`: `sim` depends on `core`, so `core` cannot
+test-depend on `sim` without a cycle colcon refuses to order.
 
 ## Running the tests
 
 ```bash
-cd src/localization/golfcart_board_initializer
+cd src/localization/reflective_pose_detector
 python3 -m pytest test
 ```
 
@@ -45,9 +89,9 @@ No ROS, no hardware, no bag. 57 tests, roughly 12 seconds on current dev host.
 ## Desk test with synthetic scans
 
 ```bash
-ros2 launch golfcart_board_initializer simulated_scene.launch.xml
-ros2 launch golfcart_board_initializer simulated_scene.launch.xml scene:=two_boards
-ros2 launch golfcart_board_initializer simulated_scene.launch.xml scene:=distractors
+ros2 launch reflective_pose_ros simulated_scene.launch.xml
+ros2 launch reflective_pose_ros simulated_scene.launch.xml scene:=two_boards
+ros2 launch reflective_pose_ros simulated_scene.launch.xml scene:=distractors
 ```
 
 Add `rviz:=true` to open RViz with `rviz/board_initializer.rviz`: the raw scan
@@ -102,7 +146,7 @@ site before validation.
 Start node with bag topic:
 
 ```bash
-ros2 launch golfcart_board_initializer board_initializer.launch.xml \
+ros2 launch reflective_pose_ros board_detector.launch.xml \
   dry_run:=true input_topic:=/your/lidar/topic
 ```
 
@@ -173,12 +217,12 @@ board instead.
 
 ```bash
 # Inspect board detection and transform; writes nothing.
-ros2 run golfcart_board_initializer anchor_map_to_board \
+anchor-map-to-board \
   /path/to/slam_export.ply -o /path/to/map \
   --config /path/to/board_initializer.param.yaml --dry-run
 
 # Write anchored map artifacts.
-ros2 run golfcart_board_initializer anchor_map_to_board \
+anchor-map-to-board \
   /path/to/slam_export.ply -o /path/to/map \
   --config /path/to/board_initializer.param.yaml
 ```
@@ -190,10 +234,9 @@ ros2 run golfcart_board_initializer anchor_map_to_board \
 | `cloud` | required | Input `.ply` or `.pcd`; must carry `intensity`. |
 | `-o`, `--output-dir` | required | Directory for generated map artifacts. |
 | `--name` | `pointcloud_map.pcd` | Output cloud filename. |
-| `--config` | package `board_initializer.param.yaml` | Shared runtime/anchoring board parameters. |
+| `--config` | packaged `reflective_pose.yaml` | Shared runtime/anchoring board parameters. |
 | `--dry-run` | off | Report result; do not write files. |
-| `--rviz` | off | Publish debug topics and hold the process open for RViz inspection. See below. |
-| `--rviz-frame` | `map_debug` | `frame_id` for the `--rviz` topics; set RViz's Fixed Frame to match. |
+| `--dump-debug PATH` | off | Write an `.npz` of the cloud, candidates and rejections for `anchor_debug_viewer`. See below. |
 
 `--config` is source of truth. It supplies detector gates, physical board
 dimensions, and `board_pose_in_map`; do not duplicate them as CLI overrides.
@@ -229,12 +272,12 @@ error: no board found in the map (60 retroreflective clusters: ...)
 
 `reason` and `centroid` are enough to tell a wrongly-gated board apart from an
 exit sign or a second reflector — but matching 60 centroids against the cloud
-by hand is still slow. Add `--rviz`:
+by hand is still slow. Add `--dump-debug` and open the result in the viewer:
 
 ```bash
-ros2 run golfcart_board_initializer anchor_map_to_board \
+anchor-map-to-board \
   /path/to/slam_export.ply -o /path/to/map \
-  --config /path/to/board_initializer.param.yaml --dry-run --rviz
+  --config /path/to/board_initializer.param.yaml --dry-run --dump-debug /tmp/anchor.npz
 ```
 
 This publishes, latched, under `/anchor_map_to_board/debug/`:
@@ -248,8 +291,10 @@ This publishes, latched, under `/anchor_map_to_board/debug/`:
   one was found; red `AMBIGUOUS candidate N` labels when more than one
   survived.
 
-Open with `rviz2 -d rviz/anchor_debug.rviz` (Fixed Frame `map_debug`, matching
-the default `--rviz-frame`). The process stays alive after printing until
+Run `ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz`, then
+open `rviz2 -d packages/reflective_pose_ros/rviz/anchor_debug.rviz` (Fixed Frame
+`map_debug`). The CLI itself has no ROS dependency, which is why the drawing
+happens in a separate viewer. The viewer stays alive until
 Ctrl+C — it does not need a localization stack, a bag, or even a successful
 anchor: this is the intended way to inspect a `NO_CANDIDATE` or `AMBIGUOUS`
 failure, not just a successful run. It reuses the exact marker/cloud-building
@@ -293,7 +338,7 @@ cart settings.
 ## On the vehicle
 
 ```bash
-ros2 launch golfcart_board_initializer board_initializer.launch.xml
+ros2 launch reflective_pose_ros board_detector.launch.xml
 ```
 
 Start this node only after the map/NDT localization stack exposes
