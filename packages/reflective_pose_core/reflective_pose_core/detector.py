@@ -5,7 +5,8 @@ runtime initializer node and the offline map-anchoring step, and keeping it pure
 numpy is what lets its tests run without ROS, without hardware, and without a
 bag.
 
-See docs/design/board_pose_initializer.md for the algorithm rationale.
+See docs/design/reflective_pose_detector.md for the package layout, and the
+gates below for the algorithm.
 """
 
 from dataclasses import dataclass, field
@@ -27,7 +28,11 @@ class Status(Enum):
 
 @dataclass
 class DetectorParams:
-    """Detection thresholds. Defaults match config/board_initializer.param.yaml."""
+    """Detection thresholds.
+
+    The defaults here are a starting point, not the deployed values: those live
+    in reflective_pose.yaml and are loaded through reflective_pose_core.config.
+    """
 
     # Stage 1 gates
     intensity_threshold: float = 110.0
