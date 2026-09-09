@@ -18,13 +18,16 @@ a detector bias cancels instead of appearing as a localization error.
 4. Merge `board_polygon.osm` into the route's `lanelet2_map.osm`, then tile the
    cloud with `autoware_pointcloud_divider`.
 
+After building and sourcing the ROS 2 workspace, run the CLI through its ROS 2
+package with `ros2 run reflective_pose_cli anchor-map-to-board`:
+
 ```bash
 # inspect; writes nothing
-anchor-map-to-board slam_export.ply -o /path/to/map \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
     --config /path/to/reflective_pose.yaml --dry-run
 
 # write the map artifacts
-anchor-map-to-board slam_export.ply -o /path/to/map \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
     --config /path/to/reflective_pose.yaml
 ```
 
@@ -72,7 +75,7 @@ second reflector, but matching sixty centroids against the cloud by hand is
 slow. Dump and view instead:
 
 ```bash
-anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
     --dump-debug /tmp/anchor.npz
 
 ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz

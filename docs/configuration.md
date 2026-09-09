@@ -12,7 +12,8 @@ packaged default. The CLI takes `--config`.
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
     config_file:=/path/to/reflective_pose.yaml
-anchor-map-to-board cloud.pcd -o map/ --config /path/to/reflective_pose.yaml
+ros2 run reflective_pose_cli anchor-map-to-board cloud.pcd -o map/ \
+    --config /path/to/reflective_pose.yaml
 ```
 
 `reflective_pose_ros` installs a copy to its `share/config/` for launch files to

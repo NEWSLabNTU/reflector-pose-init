@@ -185,12 +185,16 @@ drawn by the same `debug_viz` code, so a map-cloud debug run still looks
 identical to the live node's.
 
 ```
-$ anchor-map-to-board cloud.pcd -o map/ --dump-debug /tmp/anchor.npz
+# In a sourced ROS 2 workspace:
+$ ros2 run reflective_pose_cli anchor-map-to-board cloud.pcd -o map/ \
+    --dump-debug /tmp/anchor.npz
 $ ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
 ```
 
 Two steps instead of one, in exchange for a CLI package that installs and runs
-with no ROS present.
+with no ROS present. In that ROS-free installation, call the console script
+directly as `anchor-map-to-board`; the `ros2 run reflective_pose_cli` prefix is
+the ROS workspace form shown above.
 
 ## Entry points
 

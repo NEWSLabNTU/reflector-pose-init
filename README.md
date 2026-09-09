@@ -68,8 +68,10 @@ Anchors a SLAM cloud to the board, so the map and the vehicle's startup pose
 guess share one reference frame.
 
 ```bash
-anchor-map-to-board slam_export.ply -o /path/to/map --dry-run   # inspect
-anchor-map-to-board slam_export.ply -o /path/to/map             # write
+ros2 run reflective_pose_cli anchor-map-to-board \
+    slam_export.ply -o /path/to/map --dry-run   # inspect
+ros2 run reflective_pose_cli anchor-map-to-board \
+    slam_export.ply -o /path/to/map             # write
 ```
 
 Writes `pointcloud_map.pcd`, `board_anchor.yaml`, `board_polygon.osm` and

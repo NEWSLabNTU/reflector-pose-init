@@ -57,8 +57,8 @@ the picture is wanted, so the dump must carry everything the old inline viewer
 drew, not a summary.
 
 **Done when:** `pip install packages/reflective_pose_core packages/reflective_pose_cli`
-into a venv with no ROS, and `anchor-map-to-board --help` and a dry-run anchor
-both work there.
+into a venv with no ROS; the direct console script
+`anchor-map-to-board --help` and a dry-run anchor both work there.
 
 ### P5 — `reflective_pose_ros`
 
