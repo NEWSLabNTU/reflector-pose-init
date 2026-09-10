@@ -43,6 +43,9 @@ Two values are derived rather than repeated, because both have caused drift:
   are measured in `base_link`; map heights are measured after the CLI fits and
   levels the map floor. Their clustering, extent and planarity gates can be
   tuned independently.
+- `detector.map.aabb` is an optional map-only spatial crop. It is never applied
+  by the runtime node, and it does not change the board shape or
+  `board.pose_in_map` shared by the two modes.
 - The runtime detector's `scan_count` follows `ros.accumulate_scans`. The expected return
   count scales with the number of stacked scans, so a node accumulating ten
   against a detector assuming one rejects every real board as ten times too
@@ -67,11 +70,12 @@ The detector section has sensor-wide values and two independent gate profiles.
 | `intensity_threshold` | `240.0` | retroreflector band cutoff |
 | `azimuth_step_rad` | `0.0035` | 0.2 deg at 600 rpm / 10 Hz |
 
-Both `runtime` and `map` contain `range_min`, `range_max`, `height_min`,
-`height_max`, `board_centre_height`, `cluster_tolerance`,
-`cluster_min_points`, `extent_tolerance`, `planarity_max_thickness`,
-`verticality_max_dot`, `centre_height_tolerance`, `density_max_ratio`, and
-`density_check_enabled`.
+`runtime` contains `range_min`, `range_max`, `height_min`, and `height_max`.
+The map policy uses `map.aabb` for its spatial bounds, then shares the
+remaining candidate and geometry gates: `board_centre_height`,
+`cluster_tolerance`, `cluster_min_points`, `extent_tolerance`,
+`planarity_max_thickness`, `verticality_max_dot`, `centre_height_tolerance`,
+`density_max_ratio`, and `density_check_enabled`.
 
 `runtime.height_reference` is `base_link`. Set `runtime.floor_height_in_frame`
 to the floor's z coordinate in `base_link`; for this vehicle, the rear-axle
@@ -83,10 +87,21 @@ shortcut assumes the canonical map z datum is the floor directly below the
 board; set an explicit runtime centre height when using another datum.
 
 `map.height_reference` is `map_floor`. The CLI first fits the floor and levels
-it to z=0, so `map.height_min`, `map.height_max`, and
-`map.board_centre_height` are map-local tuning values. The source PLY's
-arbitrary z origin is not used. `map.range_max` is infinite and density is off
-by default because a merged map has no single sensor origin or scan count.
+it to z=0, so the Z bounds in `map.aabb` and `map.board_centre_height` are
+map-local tuning values. The source PLY's arbitrary z origin is not used.
+`map.range_max` is infinite and density is off by default because a merged map
+has no single sensor origin or scan count.
+
+`map.aabb` is either `null` (disabled) or a mapping with inclusive `min` and
+`max` `[x, y, z]` bounds. A `null` coordinate means that side is unbounded.
+These coordinates are in the levelled, floor-zero `map_debug` frame: after
+floor fitting, before the final board-based map placement. The source PLY's XY
+origin and heading are still arbitrary, so the box may need retuning for each
+map export. The box is applied only to detection; floor fitting, the
+room-centre viewpoint, and the output map still use the full cloud. Map
+`height_min` and `height_max` are rejected to prevent a duplicate Z filter;
+runtime height bounds remain valid in `base_link`. An AABB under
+`detector.runtime` is rejected.
 
 `height_min` and `height_max` filter individual reflective points in the named
 height frame. `board_centre_height` is a later candidate-centre gate; it does

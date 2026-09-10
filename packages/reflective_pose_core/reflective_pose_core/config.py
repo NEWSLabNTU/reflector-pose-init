@@ -28,7 +28,7 @@ from typing import Any, Dict, Optional, Tuple
 import yaml
 
 from .anchor import AnchorParams
-from .detector import DetectorParams
+from .detector import Aabb, DetectorParams
 from .geometry import CovarianceParams
 
 CONFIG_ENV_VAR = "REFLECTIVE_POSE_CONFIG"
@@ -66,6 +66,8 @@ class DetectionPolicy:
 
     range_min: float = 3.0
     range_max: float = 18.0
+    # Runtime point-height gates. Map YAML owns spatial bounds, including Z,
+    # through detector.map.aabb instead of these two fields.
     height_min: float = 0.4
     height_max: float = 1.8
     board_centre_height: Optional[float] = 1.075
@@ -91,6 +93,11 @@ def _default_map_policy() -> DetectionPolicy:
     return DetectionPolicy(
         range_min=0.0,
         range_max=float("inf"),
+        # Map spatial bounds are owned by detector.map.aabb. Keep the resolved
+        # legacy fields unbounded so an omitted AABB does not hide a second Z
+        # filter in the default policy.
+        height_min=-float("inf"),
+        height_max=float("inf"),
         height_reference="map_floor",
         density_check_enabled=False,
     )
@@ -106,6 +113,9 @@ class DetectorConfig:
     mean_elevation_step_rad: float = 0.0225
     runtime: DetectionPolicy = field(default_factory=DetectionPolicy)
     map_policy: DetectionPolicy = field(default_factory=_default_map_policy)
+    # The map-only spatial crop is kept beside, rather than inside, the
+    # runtime policy. It is applied after floor levelling by anchor_cloud.
+    map_aabb: Optional[Aabb] = None
 
     @staticmethod
     def _resolve(
@@ -317,6 +327,20 @@ def load_config(path: Optional[str] = None) -> Config:
 
     runtime_values = dict(detector_values.pop("runtime", {}) or {})
     map_values = dict(detector_values.pop("map", {}) or {})
+    if "aabb" in runtime_values:
+        raise ValueError(
+            f"{resolved}: 'detector.runtime.aabb' is map-only; put it under "
+            "'detector.map.aabb'"
+        )
+    duplicate_map_heights = {
+        key for key in ("height_min", "height_max") if key in map_values
+    }
+    if duplicate_map_heights:
+        raise ValueError(
+            f"{resolved}: {sorted(duplicate_map_heights)} are runtime-only; "
+            "use detector.map.aabb.min/max[z] for map Z bounds"
+        )
+    map_aabb_value = map_values.pop("aabb", None)
     common_names = {
         "intensity_threshold",
         "azimuth_step_rad",
@@ -330,6 +354,7 @@ def load_config(path: Optional[str] = None) -> Config:
         )
     _reject_unknown(resolved, "detector.runtime", runtime_values, DetectionPolicy)
     _reject_unknown(resolved, "detector.map", map_values, DetectionPolicy)
+    map_aabb = _parse_aabb(resolved, map_aabb_value)
 
     board = _build_board(resolved, board_values)
     ros = RosParams(**_select(ros_values, RosParams))
@@ -346,6 +371,7 @@ def load_config(path: Optional[str] = None) -> Config:
     detector_kwargs["map_policy"] = replace(
         _default_map_policy(), **_select(map_values, DetectionPolicy)
     )
+    detector_kwargs["map_aabb"] = map_aabb
     detector_config = DetectorConfig(**detector_kwargs)
     # Resolve both modes while loading so a frame mismatch fails at startup,
     # before either a ROS node or the CLI can run with a mislabeled height gate.
@@ -377,6 +403,30 @@ def _reject_unknown(path: str, section: str, values: Dict[str, Any], target_type
         raise ValueError(
             f"{path}: unknown key(s) in '{section}': {sorted(unknown)}"
         )
+
+
+def _parse_aabb(path: str, value: Any) -> Optional[Aabb]:
+    """Parse the map-only AABB without allowing partial or infinite bounds."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"min", "max"}:
+        raise ValueError(
+            f"{path}: detector.map.aabb must be null or a mapping with only "
+            "'min' and 'max'"
+        )
+    try:
+        minimum = tuple(
+            None if item is None else float(item) for item in value["min"]
+        )
+        maximum = tuple(
+            None if item is None else float(item) for item in value["max"]
+        )
+        return Aabb(minimum, maximum)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{path}: detector.map.aabb requires [x, y, z] bounds with finite "
+            "values or null for unbounded axes, and min < max on bounded axes"
+        ) from error
 
 
 def _build_board(path: str, values: Dict[str, Any]) -> BoardParams:

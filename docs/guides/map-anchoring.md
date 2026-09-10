@@ -48,6 +48,27 @@ deliberately no CLI overrides for them. Pass the exact file the vehicle will
 load when building a deployment map. The runtime policy is read from the same
 file but is not applied to the map.
 
+If the exported map contains too much of the surrounding building, set the
+optional `detector.map.aabb` in that YAML file:
+
+```yaml
+detector:
+  map:
+    aabb:
+      min: [-5.0, -3.0, 0.0]
+      max: [ 5.0,  3.0, 2.0]
+```
+
+The bounds are inclusive and use the levelled, floor-zero `map_debug` frame —
+after floor fitting and before final board placement. They are not raw PLY
+coordinates and are not final anchored-map coordinates. Floor fitting, the
+room-centre viewpoint, and the exported map still use the full cloud; only
+detection input is cropped. Because floor levelling does not establish a
+canonical XY origin or heading, choose the bounds from a debug view and expect
+to retune them when the SLAM export frame changes. Set an individual coordinate
+to `null` when that side should be unbounded, and use `aabb: null` to disable
+the entire crop.
+
 ## What it writes
 
 - `pointcloud_map.pcd` — the anchored cloud
@@ -85,7 +106,8 @@ rviz2 -d packages/reflective_pose_ros/rviz/anchor_debug.rviz    # Fixed Frame: m
 The viewer publishes, latched:
 
 - `map_cloud` — the full cloud in the gravity-levelled frame detection actually
-  ran on, coloured by intensity, so the retroreflector band is visible
+  came from, coloured by intensity, so the retroreflector band is visible. It
+  remains full even when `detector.map.aabb` crops detector input.
 - `board_points` — the accepted board's points, or every ambiguous candidate's
 - `rejected` — one text marker per rejected cluster at its centroid, with reason
   and point count; an arrow along the accepted board's normal when there was
@@ -110,6 +132,9 @@ separate viewer rather than inline.
   fitted floor. `detector.runtime.board_centre_height` is a separate gate in
   `base_link`; it may be derived from the shared board height and the vehicle's
   floor-to-`base_link` offset.
+- `detector.map.aabb`, when enabled, is a map-only inclusive spatial gate in
+  the levelled, floor-zero `map_debug` frame. It does not alter floor fitting,
+  viewpoint calculation, or the full cloud written to the map.
 - `board.pose_in_map[2]` is the authoritative board placement in the anchored
   map and is shared with runtime initialization. It is not used as a substitute
   for the map's trial-tuned height gate.

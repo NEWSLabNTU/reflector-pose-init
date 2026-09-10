@@ -77,7 +77,9 @@ def build_map_cloud(source_pose=None, with_distractors=True, seeds=(1, 2, 3)):
     return PointCloud(points=merged, intensity=merged_intensity)
 
 
-def write_config(path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]"):
+def write_config(
+    path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]", map_aabb=None
+):
     """A minimal canonical config: the board section, and defaults elsewhere.
 
     Only ``board:`` is written because that is the section this tool's answer
@@ -86,11 +88,21 @@ def write_config(path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]"):
     that goes through the CLI and one that does not are comparing like with
     like.
     """
+    map_section = ""
+    if map_aabb is not None:
+        minimum, maximum = map_aabb
+        map_section = f"""detector:
+  map:
+    aabb:
+      min: [{', '.join(str(value) for value in minimum)}]
+      max: [{', '.join(str(value) for value in maximum)}]
+"""
     path.write_text(
         f"""board:
   pose_in_map: {pose}
   width: 0.8
   height: 1.0
+{map_section}
 """
     )
 
@@ -185,6 +197,30 @@ def test_dry_run_writes_nothing(tmp_path):
 
     assert main([str(source), "-o", str(output), "--config", str(config), "--dry-run"]) == 0
     assert not output.exists()
+
+
+def test_cli_applies_map_aabb_and_records_the_full_debug_context(tmp_path, capsys):
+    cloud = build_map_cloud(with_distractors=True)
+    source = tmp_path / "glim_export.ply"
+    config = tmp_path / "reflective_pose.yaml"
+    dump = tmp_path / "anchor.npz"
+    write_glim_style_ply(source, cloud)
+    write_config(config, map_aabb=((-1.0, -1.0, 0.4), (1.0, 1.0, 1.8)))
+
+    assert main([
+        str(source), "-o", str(tmp_path / "out"), "--config", str(config),
+        "--dry-run", "--dump-debug", str(dump),
+    ]) == 0
+
+    with np.load(dump, allow_pickle=False) as data:
+        assert data["aabb_enabled"].item() is True
+        assert data["aabb_frame"].item() == "map_debug"
+        assert np.allclose(data["aabb_min"], [-1.0, -1.0, 0.4])
+        assert np.allclose(data["aabb_max"], [1.0, 1.0, 1.8])
+        assert 0 < data["n_inside_aabb"].item() < len(cloud.points)
+        assert data["cloud_points"].shape == (len(cloud.points), 3)
+
+    assert "map AABB kept" in capsys.readouterr().out
 
 
 def test_cloud_without_intensity_exits_nonzero(tmp_path, capsys):

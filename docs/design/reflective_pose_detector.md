@@ -112,6 +112,12 @@ detector:                     # core
   map:                        # heights in the fitted map floor frame
     height_reference: map_floor
     board_centre_height: 1.0
+    aabb:                      # optional [min, max] crop in map_debug
+      min: [null, null, 0.5]
+      max: [null, null, 1.5]
+    # To restrict XY as well, replace the nulls with finite map_debug values:
+    #   min: [-5.0, -3.0, 0.0]
+    #   max: [ 5.0,  3.0, 2.0]
     range_min: 0.0
     range_max: .inf
     cluster_tolerance: 0.05
