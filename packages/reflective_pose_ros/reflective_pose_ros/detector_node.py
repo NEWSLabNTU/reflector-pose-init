@@ -4,10 +4,16 @@ This node detects and publishes. It does not decide. Subscribe to a cloud, look
 up TF, accumulate scans, run ``reflective_pose_core.detect_board``, and publish
 
 * ``~/board_pose``  -- ``geometry_msgs/PoseWithCovarianceStamped``, latched,
-  the vehicle pose in ``map`` with the covariance the detection earns
+  the vehicle pose in ``map`` with the covariance the detection earns, for
+  every batch whose lone survivor clears ``detector.min_confidence``
 * ``~/debug/*``     -- the board points, the board pose in the sensor frame,
   and a per-cluster rejection marker for every cluster that was discarded
-* ``/diagnostics``  -- state and attempt count, once a second
+* ``/diagnostics``  -- the last batch's verdict (see ``decision.judge``) with
+  its confidence terms, plus state and attempt counts, once a second
+
+No outcome is terminal. An ambiguous batch and a low-confidence batch each
+suppress their own pose, say so on /diagnostics, and the next batch is
+processed like any other; ``decision.py`` carries the reasoning.
 
 What happens to that pose afterwards is somebody else's problem: whether the
 vehicle is stopped enough to trust it, how many attempts are worth making, and
@@ -50,7 +56,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from reflective_pose_core.config import load_config
-from reflective_pose_core.detector import Status, detect_board
+from reflective_pose_core.detector import detect_board
 from reflective_pose_core.geometry import (
     CovarianceParams,
     covariance_from_detection,
@@ -62,6 +68,7 @@ from reflective_pose_core.geometry import (
 )
 
 from .debug_viz import board_pose_stamped, detection_points_cloud, rejection_marker_array
+from .decision import Verdict, judge
 
 
 @dataclass
@@ -97,7 +104,6 @@ class State(Enum):
     WAIT_TF = "wait_tf"
     ACCUMULATE = "accumulate"
     DETECTED = "detected"
-    FAILED = "failed"
 
 
 def covariance_params_from_config(config) -> CovarianceParams:
@@ -131,6 +137,9 @@ class BoardDetectorNode(Node):
 
         self._config = load_config(path, scan_count=self._params.accumulate_scans)
         self._detector_params = self._config.detector
+        # The gate on what gets published. Part of the detector file, beside
+        # the gates that decide what counts as a candidate at all.
+        self._min_confidence = float(self._config.detector.min_confidence)
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
         self._accumulate_scans = int(self._params.accumulate_scans)
@@ -149,7 +158,7 @@ class BoardDetectorNode(Node):
         self._detections = 0
         self._scans = []
         self._transform_base_sensor: Optional[np.ndarray] = None
-        self._last_reason = ""
+        self._last_verdict: Optional[Verdict] = None
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -239,9 +248,6 @@ class BoardDetectorNode(Node):
     # -- callbacks ----------------------------------------------------------
 
     def _on_cloud(self, msg: PointCloud2):
-        if self._state is State.FAILED:
-            return
-
         if self._transform_base_sensor is None:
             self._transform_base_sensor = self._lookup_transform()
             if self._transform_base_sensor is None:
@@ -310,40 +316,13 @@ class BoardDetectorNode(Node):
         )
         self._publish_clusters(result, frame_id)
 
-        if result.status is Status.AMBIGUOUS:
-            # The map holds one board. A second survivor means that assumption
-            # is broken, and choosing between them would produce a confident
-            # wrong pose, so this failure is terminal rather than retried.
-            details = "; ".join(
-                f"{candidate.range_m:.1f} m, {candidate.n_points} pts, "
-                f"{candidate.extents[0]:.2f}x{candidate.extents[1]:.2f}"
-                for candidate in result.candidates
-            )
-            rejected = ", ".join(
-                f"{rejection.reason} {rejection.detail}".strip()
-                for rejection in result.rejections
-            )
-            self._fail(
-                f"ambiguous: {len(result.candidates)} board candidates survived "
-                f"gating [{details}] out of {result.n_clusters} clusters "
-                f"(rejected: {rejected or 'none'})"
-            )
-            return
-
-        if result.status is not Status.OK:
+        verdict = judge(result, self._min_confidence)
+        self._last_verdict = verdict
+        if not verdict.publish:
             # No attempt budget here: the node keeps looking, and a consumer
             # that wants to give up after N tries counts the poses it did not
             # receive. Giving up is policy.
-            reasons = ", ".join(
-                f"{rejection.reason} {rejection.detail}".strip()
-                for rejection in result.rejections
-            )
-            reason = (
-                f"no candidate (retro points {result.n_after_gates}, "
-                f"clusters {result.n_clusters}): {reasons or 'nothing clustered'}"
-            )
-            self.get_logger().warn(f"attempt {self._attempts}: {reason}")
-            self._last_reason = reason
+            self.get_logger().warn(f"attempt {self._attempts}: {verdict.message}")
             return
 
         detection = result.detection
@@ -358,7 +337,8 @@ class BoardDetectorNode(Node):
         yaw = float(np.arctan2(pose[1, 0], pose[0, 0]))
         self.get_logger().info(
             "board detected at %.1f m, %d points, extents %.2f x %.2f, "
-            "centre constrained h=%s v=%s, pose: x=%.3f y=%.3f z=%.3f yaw=%.2f rad (%.1f deg)"
+            "centre constrained h=%s v=%s, confidence %.2f (%s), "
+            "pose: x=%.3f y=%.3f z=%.3f yaw=%.2f rad (%.1f deg)"
             % (
                 detection.range_m,
                 detection.n_points,
@@ -366,6 +346,8 @@ class BoardDetectorNode(Node):
                 detection.extents[1],
                 horizontal_ok,
                 vertical_ok,
+                detection.confidence,
+                " ".join(f"{k}={v:.2f}" for k, v in detection.confidence_terms.items()),
                 px,
                 py,
                 pz,
@@ -377,7 +359,6 @@ class BoardDetectorNode(Node):
         self._board_pose_pub.publish(self._pose_message(pose, covariance))
         self._detections += 1
         self._state = State.DETECTED
-        self._last_reason = f"board detected, pose published ({self._detections})"
 
     def _pose_message(
         self, pose: np.ndarray, covariance: np.ndarray
@@ -395,11 +376,6 @@ class BoardDetectorNode(Node):
         message.pose.pose.orientation.w = w
         message.pose.covariance = covariance.reshape(-1).tolist()
         return message
-
-    def _fail(self, reason: str):
-        self._state = State.FAILED
-        self._last_reason = reason
-        self.get_logger().error(reason)
 
     # -- debug output -------------------------------------------------------
     #
@@ -432,18 +408,22 @@ class BoardDetectorNode(Node):
         status = DiagnosticStatus()
         status.name = "localization: board_detector"
         status.hardware_id = "board_detector"
-        if self._state is State.DETECTED:
-            status.level = DiagnosticStatus.OK
-        elif self._state is State.FAILED:
-            status.level = DiagnosticStatus.ERROR
-        else:
+        # The level follows the last batch, not the best one: a board found
+        # ten batches ago and lost since is a WARN with a reason, not an OK.
+        verdict = self._last_verdict
+        if verdict is None:
             status.level = DiagnosticStatus.WARN
-        status.message = self._last_reason or self._state.value
+            status.message = self._state.value
+        else:
+            status.level = verdict.level
+            status.message = verdict.message
         status.values = [
             KeyValue(key="state", value=self._state.value),
             KeyValue(key="attempts", value=str(self._attempts)),
             KeyValue(key="detections", value=str(self._detections)),
         ]
+        if verdict is not None:
+            status.values += [KeyValue(key=key, value=value) for key, value in verdict.values]
 
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
