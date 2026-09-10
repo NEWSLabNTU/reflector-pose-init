@@ -16,7 +16,13 @@
   <maintainer email="dev@golfcart.org">Golf Cart Team</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <!--
+    python3-setuptools, not ament_python. ament_python is a build type and
+    belongs in the export block below; no package by that name exists, so
+    rosdep reported it as unresolvable on every run. setup.py is what actually
+    needs installing.
+  -->
+  <buildtool_depend>python3-setuptools</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>python3-numpy</depend>
