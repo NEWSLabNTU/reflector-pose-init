@@ -26,6 +26,55 @@ class Status(Enum):
     AMBIGUOUS = "ambiguous"
 
 
+@dataclass(frozen=True)
+class Aabb:
+    """An axis-aligned box in a named point-cloud frame.
+
+    ``None`` on one side of an axis means that side is unbounded. This lets a
+    map use the same object for a full XY search with only a Z slab, without
+    reintroducing separate map height bounds.
+    """
+
+    minimum: Tuple[Optional[float], Optional[float], Optional[float]]
+    maximum: Tuple[Optional[float], Optional[float], Optional[float]]
+
+    def __post_init__(self):
+        try:
+            minimum = tuple(
+                None if value is None else float(value) for value in self.minimum
+            )
+            maximum = tuple(
+                None if value is None else float(value) for value in self.maximum
+            )
+        except TypeError as error:
+            raise ValueError("AABB bounds must each contain three values") from error
+        if len(minimum) != 3 or len(maximum) != 3:
+            raise ValueError("AABB bounds must each contain exactly three values")
+        if any(
+            value is not None and not np.isfinite(value)
+            for value in (*minimum, *maximum)
+        ):
+            raise ValueError("AABB bounds must contain finite values or null")
+        for lower, upper in zip(minimum, maximum):
+            if lower is not None and upper is not None and lower >= upper:
+                raise ValueError(
+                    "AABB minimum must be less than maximum on every bounded axis"
+                )
+        object.__setattr__(self, "minimum", minimum)
+        object.__setattr__(self, "maximum", maximum)
+
+    def contains(self, points: np.ndarray) -> np.ndarray:
+        """Return an inclusive mask for points inside this box."""
+        points = np.asarray(points)
+        keep = np.ones(len(points), dtype=bool)
+        for axis, (lower, upper) in enumerate(zip(self.minimum, self.maximum)):
+            if lower is not None:
+                keep &= points[:, axis] >= lower
+            if upper is not None:
+                keep &= points[:, axis] <= upper
+        return keep
+
+
 @dataclass
 class DetectorParams:
     """Detection thresholds.

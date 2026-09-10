@@ -32,8 +32,14 @@ detection, which is the case this tool exists for.
     status              ()     str, a Status name or value ("ok",
                         "no_candidate", "ambiguous"); inferred from what else
                         is present when absent
-    n_after_gates       ()     int, points that passed the stage-1 gates
+    n_after_gates       ()     int, points that passed the map AABB (if enabled)
+                               and stage-1 gates
     n_clusters          ()     int, clusters formed
+    aabb_enabled        ()     bool, whether map-only cropping was enabled
+    aabb_frame          ()     str, normally ``map_debug``
+    aabb_min, aabb_max  (3,)   float, inclusive bounds; NaN when disabled or
+                               unbounded on an axis
+    n_inside_aabb       ()     int, points inside the crop (or all points)
 
     detection_points    (M, 3) float, the accepted cluster
     detection_centre    (3,)   float

@@ -30,7 +30,7 @@ from typing import Callable, Optional, Tuple
 
 import numpy as np
 
-from .detector import DetectorParams, DetectResult, Status, detect_board
+from .detector import Aabb, DetectorParams, DetectResult, Status, detect_board
 from .geometry import make_transform, matrix_from_euler_rpy
 from .pointcloud_io import PointCloud
 
@@ -165,6 +165,7 @@ def anchor_cloud(
     params: Optional[AnchorParams] = None,
     detector_params: Optional[DetectorParams] = None,
     on_result: Optional[Callable[[np.ndarray, np.ndarray, DetectResult, np.ndarray], None]] = None,
+    aabb: Optional[Aabb] = None,
 ) -> AnchorResult:
     """Find the board in a map cloud and compute the transform that anchors it.
 
@@ -176,6 +177,11 @@ def anchor_cloud(
     ``detector_params`` is the already-resolved map policy. If it is omitted,
     ``detector_params_for_map`` supplies conservative direct-library defaults;
     it never reaches into the runtime node's configuration.
+
+    ``aabb`` is an optional map-only crop in the levelled, floor-zero
+    ``map_debug`` frame. It restricts detector input; floor fitting, viewpoint
+    calculation, and the cloud written to the anchored map still use every
+    point.
 
     ``on_result``, if given, is called with ``(levelled_points, intensity,
     DetectResult, viewpoint)`` right after detection runs and before either
@@ -214,10 +220,28 @@ def anchor_cloud(
         else replace(detector_params)
     )
     map_params.viewpoint = viewpoint
-    result: DetectResult = detect_board(levelled, intensity, np.eye(4), map_params)
+
+    detection_points = levelled
+    detection_intensity = intensity
+    n_inside_aabb = len(levelled)
+    if aabb is not None:
+        inside_aabb = aabb.contains(levelled)
+        n_inside_aabb = int(np.count_nonzero(inside_aabb))
+        detection_points = levelled[inside_aabb]
+        detection_intensity = intensity[inside_aabb]
+
+    result: DetectResult = detect_board(
+        detection_points, detection_intensity, np.eye(4), map_params
+    )
 
     if on_result is not None:
         on_result(levelled, intensity, result, viewpoint)
+
+    if aabb is not None and n_inside_aabb == 0:
+        raise ValueError(
+            "no points inside map AABB in the levelled, floor-zero map_debug "
+            f"frame (min={aabb.minimum}, max={aabb.maximum})"
+        )
 
     if result.status is Status.AMBIGUOUS:
         raise ValueError(

@@ -20,6 +20,7 @@ from reflective_pose_core.config import (
     default_config_path,
     load_config,
 )
+from reflective_pose_core.detector import Aabb
 
 
 def write_config(path, pose):
@@ -79,8 +80,9 @@ detector:
   map:
     height_reference: map_floor
     board_centre_height: 1.0
-    height_min: 0.8
-    height_max: 1.2
+    aabb:
+      min: [null, null, 0.8]
+      max: [null, null, 1.2]
     cluster_tolerance: 0.05
     cluster_min_points: 60
     planarity_max_thickness: 0.08
@@ -100,11 +102,76 @@ detector:
     assert mapped.planarity_max_thickness == 0.08
     assert runtime.board_centre_height == pytest.approx(1.035)
     assert mapped.board_centre_height == 1.0
+    assert config.detector.map_aabb == Aabb(
+        (None, None, 0.8), (None, None, 1.2)
+    )
+    assert mapped.height_min == float("-inf")
+    assert mapped.height_max == float("inf")
     assert runtime.height_reference == "base_link"
     assert mapped.height_reference == "map_floor"
     assert runtime.board_width == mapped.board_width == config.board.width
     assert runtime.board_height == mapped.board_height == config.board.height
     assert config.anchor.board_pose_in_map == config.board.pose_in_map
+
+
+def test_map_aabb_is_loaded_separately_from_runtime_policy(tmp_path):
+    config_file = tmp_path / "map_crop.yaml"
+    config_file.write_text(
+        """detector:
+  map:
+    aabb:
+      min: [-4.0, -2.0, 0.2]
+      max: [ 6.0,  3.0, 1.8]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(str(config_file))
+
+    assert config.detector.map_aabb == Aabb((-4.0, -2.0, 0.2), (6.0, 3.0, 1.8))
+    assert config.runtime_detector.height_reference == "base_link"
+    assert config.map_detector.height_reference == "map_floor"
+    assert config.map_detector.height_min == float("-inf")
+    assert config.map_detector.height_max == float("inf")
+
+
+@pytest.mark.parametrize(
+    "aabb, message",
+    [
+        ("{min: [0, 0, 0]}", "min.*max"),
+        ("{min: [0, 0], max: [1, 1, 1]}", "finite"),
+        ("{min: [1, 0, 0], max: [1, 1, 1]}", "min < max"),
+        ("{min: [-.inf, 0, 0], max: [1, 1, 1]}", "finite"),
+    ],
+)
+def test_map_aabb_rejects_invalid_bounds(tmp_path, aabb, message):
+    config_file = tmp_path / "invalid_aabb.yaml"
+    config_file.write_text(
+        f"detector:\n  map:\n    aabb: {aabb}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_config(str(config_file))
+
+
+def test_runtime_aabb_is_rejected_as_map_only(tmp_path):
+    config_file = tmp_path / "runtime_aabb.yaml"
+    config_file.write_text(
+        "detector:\n  runtime:\n    aabb: null\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="map-only"):
+        load_config(str(config_file))
+
+
+def test_map_height_bounds_are_rejected_in_favour_of_aabb(tmp_path):
+    config_file = tmp_path / "duplicate_map_height.yaml"
+    config_file.write_text(
+        "detector:\n  map:\n    height_min: 0.5\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="aabb"):
+        load_config(str(config_file))
 
 
 def test_omitted_sections_fall_back_to_the_dataclass_defaults(tmp_path):

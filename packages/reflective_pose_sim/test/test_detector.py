@@ -8,7 +8,7 @@ under test rather than a separately maintained constant.
 import numpy as np
 import pytest
 
-from reflective_pose_core.detector import DetectorParams, Status, detect_board
+from reflective_pose_core.detector import Aabb, DetectorParams, Status, detect_board
 from reflective_pose_core.geometry import (
     covariance_from_detection,
     make_transform,
@@ -92,6 +92,21 @@ def test_two_boards_abort_as_ambiguous():
     assert result.status is Status.AMBIGUOUS
     assert result.detection is None
     assert len(result.candidates) == 2
+
+
+def test_aabb_inclusive_bounds_can_select_one_candidate_region():
+    """The spatial crop belongs to map anchoring, not the runtime detector."""
+    # This exercises the box primitive's boundary contract independently of
+    # anchor_cloud, whose crop is applied after map floor levelling.
+    aabb = Aabb((0.0, -1.0, 0.0), (1.0, 2.0, 1.0))
+    points = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 2.0, 1.0], [1.01, 0.0, 0.5]],
+        dtype=float,
+    )
+    assert aabb.contains(points).tolist() == [True, True, False]
+
+    z_slab = Aabb((None, None, 0.5), (None, None, 1.5))
+    assert z_slab.contains(points).tolist() == [False, True, True]
 
 
 def test_tilted_board_is_not_rejected_by_the_verticality_gate():

@@ -37,10 +37,12 @@ Identity
 ``error``               () unicode — the ``anchor_cloud`` failure message, or
                         ``""`` when anchoring succeeded
 
-The cloud the detector actually saw
+The levelled cloud and map crop
 -----------------------------------
-Gravity-levelled, floor at z = 0 — the frame every other array here is in, and
-what the old ``~/debug/map_cloud`` topic carried.
+The context cloud is gravity-levelled with floor at z = 0 — the frame every
+other array here is in, and what the old ``~/debug/map_cloud`` topic carried.
+When a map AABB is enabled, the detector sees only the points inside its
+inclusive bounds; the context cloud remains the full map.
 
 ``cloud_points``        (N, 3) float32
 ``cloud_intensity``     (N,)   float32
@@ -50,7 +52,15 @@ what the old ``~/debug/map_cloud`` topic carried.
 
 Counts, as the old stderr summary printed them
 ----------------------------------------------
-``n_after_gates``       () int32 — points passing intensity/range/height
+``aabb_enabled``        () bool — whether a map-only crop was applied
+``aabb_frame``          () unicode — always ``"map_debug"`` when enabled
+``aabb_min``            (3,) float64 — inclusive lower bound, NaN when disabled
+                        or unbounded on an axis
+``aabb_max``            (3,) float64 — inclusive upper bound, NaN when disabled
+                        or unbounded on an axis
+``n_inside_aabb``       () int32 — points inside the AABB, or all points when disabled
+``n_after_gates``       () int32 — points passing the AABB (when enabled) and
+                        intensity/range/height gates
 ``n_clusters``          () int32 — clusters formed
 ``n_candidates``        () int32 — K, clusters surviving every gate
 ``n_rejections``        () int32 — R
@@ -195,7 +205,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_rejections(result, stream=None):
+def _print_rejections(
+    result, stream=None, aabb=None, n_inside_aabb=None, n_input=None
+):
     """Per-cluster detail for a failed or ambiguous attempt.
 
     ``anchor_cloud``'s exception message is one flattened line so it stays
@@ -208,12 +220,21 @@ def _print_rejections(result, stream=None):
     gets to swap it in.
     """
     stream = stream if stream is not None else sys.stderr
-    print(
-        f"  {result.n_after_gates} point(s) passed the intensity/range/height "
-        f"gates, {result.n_clusters} cluster(s) formed, "
-        f"{len(result.candidates)} survived every gate",
-        file=stream,
-    )
+    if aabb is not None:
+        print(
+            f"  {n_inside_aabb} of {n_input} point(s) inside the map AABB; "
+            f"{result.n_after_gates} passed the intensity/range/height gates, "
+            f"{result.n_clusters} cluster(s) formed, "
+            f"{len(result.candidates)} survived every gate",
+            file=stream,
+        )
+    else:
+        print(
+            f"  {result.n_after_gates} point(s) passed the intensity/range/height "
+            f"gates, {result.n_clusters} cluster(s) formed, "
+            f"{len(result.candidates)} survived every gate",
+            file=stream,
+        )
     if result.candidates:
         print("  surviving candidates:", file=stream)
         for index, candidate in enumerate(result.candidates, start=1):
@@ -406,7 +427,8 @@ def _rejection_block(rejections, params):
 
 
 def write_debug_dump(
-    path, captured, detector_params, source_cloud, anchor_result=None, error=""
+    path, captured, detector_params, source_cloud, anchor_result=None, error="",
+    aabb=None,
 ):
     """Write everything the old ``--rviz`` path drew, as a numpy ``.npz``.
 
@@ -423,6 +445,23 @@ def write_debug_dump(
 
     names, values = _numeric_params(params)
     nan = float("nan")
+    levelled = np.asarray(captured["levelled"])
+    if aabb is None:
+        aabb_enabled = False
+        aabb_min = np.full(3, nan)
+        aabb_max = np.full(3, nan)
+        n_inside_aabb = len(levelled)
+    else:
+        aabb_enabled = True
+        aabb_min = np.asarray(
+            [nan if value is None else value for value in aabb.minimum],
+            dtype=np.float64,
+        )
+        aabb_max = np.asarray(
+            [nan if value is None else value for value in aabb.maximum],
+            dtype=np.float64,
+        )
+        n_inside_aabb = int(np.count_nonzero(aabb.contains(levelled)))
 
     arrays = {
         "format": np.array(DUMP_FORMAT),
@@ -431,9 +470,14 @@ def write_debug_dump(
         "frame_id": np.array(DUMP_FRAME_ID),
         "status": np.array(result.status.value),
         "error": np.array(error or ""),
-        "cloud_points": np.asarray(captured["levelled"], dtype=np.float32),
+        "cloud_points": levelled.astype(np.float32),
         "cloud_intensity": np.asarray(captured["intensity"], dtype=np.float32),
         "viewpoint": np.asarray(captured["viewpoint"], dtype=np.float64),
+        "aabb_enabled": np.bool_(aabb_enabled),
+        "aabb_frame": np.array(DUMP_FRAME_ID),
+        "aabb_min": aabb_min,
+        "aabb_max": aabb_max,
+        "n_inside_aabb": np.int32(n_inside_aabb),
         "n_after_gates": np.int32(result.n_after_gates),
         "n_clusters": np.int32(result.n_clusters),
         "n_candidates": np.int32(len(result.candidates)),
@@ -472,6 +516,7 @@ def main(argv=None) -> int:
         return 2
     params = config.anchor
     detector_params = config.map_detector
+    aabb = config.detector.map_aabb
 
     cloud = read_cloud(args.cloud)
     print(f"read {len(cloud)} points from {args.cloud}")
@@ -510,15 +555,28 @@ def main(argv=None) -> int:
         write_debug_dump(
             args.dump_debug, captured, detector_params, args.cloud,
             anchor_result=anchor_result, error=error,
+            aabb=aabb,
         )
         print(f"wrote debug dump {args.dump_debug}", file=sys.stderr)
 
     try:
-        result = anchor_cloud(cloud, params, detector_params, on_result=_capture)
+        result = anchor_cloud(
+            cloud, params, detector_params, on_result=_capture, aabb=aabb
+        )
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         if "result" in captured:
-            _print_rejections(captured["result"])
+            n_inside_aabb = (
+                int(np.count_nonzero(aabb.contains(captured["levelled"])))
+                if aabb is not None
+                else None
+            )
+            _print_rejections(
+                captured["result"],
+                aabb=aabb,
+                n_inside_aabb=n_inside_aabb,
+                n_input=len(cloud.points),
+            )
         _dump(error=str(error))
         return 1
 
@@ -526,6 +584,13 @@ def main(argv=None) -> int:
     # from here on is one a person would want the picture for, and one call site
     # cannot go out of step with the others.
     _dump(anchor_result=result)
+
+    if aabb is not None:
+        n_inside_aabb = int(np.count_nonzero(aabb.contains(captured["levelled"])))
+        print(
+            f"map AABB kept {n_inside_aabb} of {len(cloud.points)} points "
+            "for detection"
+        )
 
     detection = result.detection
     print(

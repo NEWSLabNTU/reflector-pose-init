@@ -18,7 +18,7 @@ from reflective_pose_core.anchor import (
     detector_params_for_map,
     fit_floor,
 )
-from reflective_pose_core.detector import Status
+from reflective_pose_core.detector import Aabb, Status
 from reflective_pose_core.geometry import make_transform
 from reflective_pose_core.pointcloud_io import PointCloud
 from reflective_pose_sim import scenes, vlp32_sim
@@ -139,6 +139,42 @@ def test_map_height_gate_is_invariant_to_source_frame_z_translation():
             detector_params=map_params,
         )
         assert result.detection is not None
+
+
+def test_map_aabb_restricts_detection_but_keeps_full_map_cloud():
+    cloud = build_map_cloud(with_distractors=True)
+    aabb = Aabb((-1.0, -1.0, 0.4), (1.0, 1.0, 1.8))
+    captured = {}
+
+    result = anchor_cloud(
+        cloud,
+        aabb=aabb,
+        on_result=lambda levelled, intensity, detect_result, viewpoint: captured.update(
+            levelled=levelled, result=detect_result
+        ),
+    )
+
+    assert result.detection is not None
+    assert result.n_points == len(cloud.points)
+    assert len(captured["levelled"]) == len(cloud.points)
+    assert captured["result"].n_after_gates == result.detection.n_points
+
+
+def test_empty_map_aabb_is_an_explicit_failure_and_still_calls_hook():
+    cloud = build_map_cloud(with_distractors=True)
+    captured = {}
+
+    with pytest.raises(ValueError, match="no points inside map AABB"):
+        anchor_cloud(
+            cloud,
+            aabb=Aabb((20.0, 20.0, 0.0), (21.0, 21.0, 1.0)),
+            on_result=lambda levelled, intensity, detect_result, viewpoint: captured.update(
+                result=detect_result
+            ),
+        )
+
+    assert captured["result"].status is Status.NO_CANDIDATE
+    assert captured["result"].n_after_gates == 0
 
 
 def test_anchoring_places_board_at_configured_pose():
