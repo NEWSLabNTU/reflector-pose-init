@@ -4,8 +4,10 @@ Finds a retroreflective board of known size and known position in a LiDAR scan,
 and derives the sensor's pose in the map from it. Intended as a cold-start pose
 source where GNSS is unavailable — indoors, under cover.
 
-One-shot, not a localizer: it runs while the vehicle is stationary and can see
-its board, produces one pose, and stops.
+A cold-start pose source, not a localizer: it publishes a pose for every
+batch of scans in which it finds the board with enough confidence, and nothing
+for the batches in which it does not. Whoever consumes the pose decides when
+the vehicle is stationary enough to act on one.
 
 ## Packages
 

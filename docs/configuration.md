@@ -63,8 +63,8 @@ tool leaves it at one.
 |---|---|---|
 | `pose_in_map` | `[0, 0, 1.3, 0, 0, 0]` | `[x, y, z, roll, pitch, yaw]`, radians, rotation `Rz(yaw) @ Ry(pitch) @ Rx(roll)` |
 | `width` | `0.6` | reflective face width, metres |
-| `height` | `0.97` | reflective face height, metres |
-| `centre_height` | `1.0` | expected centre height above the local floor, metres |
+| `height` | `0.6` | reflective face height, metres |
+| `centre_height` | `1.3` | expected centre height above the local floor, metres |
 
 `centre_height` and `pose_in_map[2]` are different things: the first is the
 physical mounting height the detector expects, the second is a map coordinate.
@@ -75,10 +75,10 @@ frame carries an offset.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `intensity_threshold` | `240.0` | retroreflector band cutoff |
+| `intensity_threshold` | `100.0` | retroreflector band cutoff |
 | `range_min` / `range_max` | `3.0` / `18.0` | usable range, metres |
-| `height_min` / `height_max` | `0.5` / `1.5` | accepted candidate centre height |
-| `cluster_tolerance` | `0.05` | clustering distance, metres |
+| `height_min` / `height_max` | `0.5` / `1.65` | band of point heights above `base_link` kept before clustering |
+| `cluster_tolerance` | `0.15` | clustering distance, metres |
 | `cluster_min_points` | `60` | smallest cluster considered |
 | `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
 | `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
@@ -87,19 +87,62 @@ frame carries an offset.
 | `density_max_ratio` | `1.4` | upper bound on returns vs expected |
 | `density_check_enabled` | `true` | whether the density gate runs |
 | `azimuth_step_rad` | `0.0035` | 0.2 deg at 600 rpm / 10 Hz |
+| `min_confidence` | `0.6` | below this, a surviving cluster is not published |
 
-Three of these are measurements rather than tunings, and the comments in the
+Most of these are measurements rather than tunings, and the comments in the
 YAML say so:
 
-- **`intensity_threshold: 240`** — the VLP-32C reports calibrated reflectivity,
-  0-100 diffuse and 101-255 reserved for retroreflectors. This is a sensor
-  contract.
+- **`intensity_threshold: 100`** — the VLP-32C reports calibrated reflectivity,
+  0-100 diffuse and 101-255 reserved for retroreflectors. 100 is the bottom
+  edge of that band, so this is a sensor contract — and, unlike the 240 it
+  replaced, one the board reaches: over the replay bag no scan cleared
+  `cluster_min_points` at 240, and every scan does at 100. The evidence table
+  is beside the key. The cost is that everything retroreflective now passes
+  this gate, and the geometry, the confidence gate and a non-terminal
+  `AMBIGUOUS` are what sort it.
+- **`cluster_tolerance: 0.15`** and **`height_max: 1.65`** — measured together
+  on the replay bag. The board sits 0.66 m below the cart's sensor, in the
+  part of the fan where ring spacing is 0.1 m at 5 m and more below 4 m; at
+  the old 0.05 it split into ring stripes in every one of 235 batches, and
+  0.10 still lost a ring at 3 m. 0.15 bridges the rings but also the 0.1 m
+  gap to a second retroreflective band directly above the board (top at
+  1.6 m, band 1.7 to 1.9 m), which merged into the cluster in 2 of 9 batches
+  and lifted the centre 6 to 9 cm; `height_max: 1.65` keeps that band out.
+  The old 1.5 clipped the top 0.1 m of the board itself.
 - **`range_min: 3.0`** — below 3 m the board falls into the sparse lower
   elevation band, where the 9.4 degree gap between the -25.0 and -15.6 degree
   beams disconnects its bottom third from the rest of the cluster. Measured in
   simulation.
 - **`density_max_ratio`** — an upper bound only. Yaw, occlusion and dropout all
   legitimately reduce the return count; nothing legitimately inflates it.
+
+#### `min_confidence`
+
+Every cluster that survives the gates carries one confidence in `[0, 1]`,
+computed in `reflective_pose_core.detector.confidence_terms` from what the
+gates already measured, re-expressed as how far inside each gate the cluster
+landed:
+
+| Term | Weight | 1 means | 0 means |
+|---|---|---|---|
+| `planarity` | 1 | residual under half `planarity_max_thickness` | at the gate |
+| `extent` | 1 | nominal size (an under-read of one sample spacing is forgiven) | at the edge of `extent_tolerance` |
+| `density` | 1 | the return count the sensor model predicts | none, or at `density_max_ratio` |
+| `edges` | 2 | all four bounding edges observed | none |
+| `range` | 0.5 | at `range_min` | at `range_max` |
+
+`edges` weighs double because a hidden edge is the one defect that biases the
+*centre* — by up to half the hidden width — rather than merely widening the
+covariance. `range` weighs half because the covariance already grows with it.
+
+The node publishes no pose below `min_confidence`, and `/diagnostics` says
+`low confidence 0.xx < 0.yy` with every term as a key/value; the next batch is
+judged afresh. Nothing is terminal. The default 0.6 sits between the two
+populations the simulator produces: a clean board scores 0.86 to 0.93 across
+3 to 15 m (yaw to 60 degrees, blooming or 70 % dropout still 0.79 to 0.90),
+while a board with one edge hidden scores 0.55. The replay bag's stationary
+detections score 0.85 to 0.89. The offline tool prints the same number, so a
+map anchored to a weak detection is visible as such.
 
 ### covariance
 

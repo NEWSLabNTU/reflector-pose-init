@@ -55,9 +55,10 @@ ros2 topic echo /diagnostics
 
 - `~/debug/board_points` contains only accepted board points.
 - `~/board_pose` appears, carrying the pose and its covariance.
-- The log reports range, point count, extents, centre constraints, and the
-  computed map `x`, `y`, `z` and yaw.
-- Diagnostics reach `OK` with state `done`.
+- The log reports range, point count, extents, centre constraints, the
+  confidence with its terms, and the computed map `x`, `y`, `z` and yaw.
+- Diagnostics reach `OK` with state `detected`, and carry `confidence` and
+  `confidence.*` keys on every attempt.
 
 Record each run: bag name, measured board distance, configured dimensions and
 height, calculated pose, independently expected pose, pass or fail. That makes
@@ -68,12 +69,15 @@ calibration and map changes comparable across sessions.
 | Result | Behaviour | First checks |
 |---|---|---|
 | `NO_CANDIDATE` | retries each accumulation batch | intensity field and band, topic and frame, TF, range and height gates, the rejected-cluster labels |
-| `AMBIGUOUS` | fails immediately, never picks | a second reflector, reflective sign or tape, board dimensions, the RViz candidate labels |
+| `AMBIGUOUS` | publishes nothing for that batch, never picks, retries the next batch | a second reflector, reflective sign or tape, board dimensions, the `candidate_N` diagnostic values and the RViz candidate labels |
+| `low confidence` | publishes nothing for that batch, retries the next batch | the `confidence.*` diagnostic values name the weak term: a hidden edge (`edges`), a smeared or clipped extent (`extent`), too few or too many returns (`density`) |
 | no pose published at all | detector never converged | run the [desk test](desk-test.md) to separate a config problem from a data problem |
 | `service unavailable` | the Autoware node fails after a 5 s wait | start the localization stack; check `/localization/initialize` |
 
-`FAILED` is terminal. Correct the setup and restart the node; it does not retry
-after failure.
+No outcome is terminal: every batch is judged on its own, so a transient
+second reflector or a weak view costs one batch, not the run. `/diagnostics`
+is `OK` only while the *last* batch published a pose; a board found and then
+lost reads `WARN` with the reason.
 
 Debug topics are transient-local. Read them against diagnostics and the current
 log, since latched markers can otherwise look current.
