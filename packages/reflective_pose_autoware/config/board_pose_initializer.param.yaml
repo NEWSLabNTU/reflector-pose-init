@@ -1,0 +1,22 @@
+# The handoff policy for board_pose_initializer: how a detected pose becomes a
+# call to Autoware's pose initializer. Properties of the vehicle stack, not of
+# the board, which is why this is not part of the detector file.
+#
+# Every key here is a field of Policy in initializer_node.py, and the values
+# are the node's own defaults; a test holds the two together.
+/**:
+  ros__parameters:
+    initialize_service: /localization/initialize
+    max_speed_for_init: 0.05          # [m/s]
+    max_attempts: 5
+    # Off by default: a silent fallback to a fixed pose turns a detector
+    # failure into a mislocalization report three weeks later.
+    fallback_to_user_defined_pose: false
+
+    # How long to wait for a board pose before the attempt budget counts one
+    # as spent. Zero disables it.
+    #
+    # Detection and the service call are two processes, so an attempt is one
+    # pose acted on: a detector that never detects spends no attempts and the
+    # fallback never runs. This bounds that case.
+    pose_wait_timeout: 0.0

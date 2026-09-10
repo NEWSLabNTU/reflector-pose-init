@@ -2,20 +2,30 @@
 <!--
   Cold-start localization from the retroreflective board, as an Autoware
   deployment runs it: the generic detector node and the Autoware handoff, wired
-  together on one topic and reading one configuration file.
+  together on one topic.
 
   Off by default outdoors, and only against a map anchored to the board.
 
   The two nodes were one before the package split. They are separate processes
   now so that the detector can run in a stack that is not Autoware; this launch
   file is the place that puts them back together.
+
+  Three files. The detector file (config_file) is what the detector looks for
+  and is shared with the offline anchoring tool. The other two are each node's
+  own ROS parameters: the detector's wiring, and this package's handoff policy.
 -->
 <launch>
-  <!-- Empty means reflective_pose_core.default_config_path(): the environment
-       override, then the installed package data, then the checkout. Both nodes
-       must be given the same file - board: is shared truth, and
-       ros.accumulate_scans feeds the detector's expected return count. -->
-  <arg name="config_file" default=""/>
+  <arg name="config_file"
+       default="$(find-pkg-share reflective_pose_core)/config/detector.yaml"
+       description="the detector file: board, gates, covariance"/>
+  <arg name="detector_params_file"
+       default="$(find-pkg-share reflective_pose_ros)/config/board_detector.param.yaml"
+       description="board_detector_node wiring: frames, accumulation, motion guard"/>
+  <arg name="initializer_params_file"
+       default="$(find-pkg-share reflective_pose_autoware)/config/board_pose_initializer.param.yaml"
+       description="board_pose_initializer policy: speed gate, attempts, fallback"/>
+  <arg name="input_topic" default="/sensing/lidar/top/pointcloud_raw_ex"
+       description="PointCloud2 with an intensity field"/>
 
   <arg name="namespace" default="/localization"/>
   <arg name="detector_name" default="board_detector"/>
@@ -32,14 +42,16 @@
     <!-- Detects. Knows nothing about Autoware. -->
     <node pkg="reflective_pose_ros" exec="board_detector_node"
           name="$(var detector_name)" output="$(var output)">
+      <param from="$(var detector_params_file)"/>
       <param name="config_file" value="$(var config_file)"/>
+      <remap from="~/input/pointcloud" to="$(var input_topic)"/>
       <remap from="~/board_pose" to="$(var board_pose_topic)"/>
     </node>
 
     <!-- Decides: speed gate, attempt budget, fallback policy, service call. -->
     <node pkg="reflective_pose_autoware" exec="board_pose_initializer"
           name="board_pose_initializer" output="$(var output)">
-      <param name="config_file" value="$(var config_file)"/>
+      <param from="$(var initializer_params_file)"/>
       <remap from="/localization/board_detector/board_pose"
              to="$(var board_pose_topic)"/>
     </node>

@@ -2,7 +2,7 @@
 
 Design: [../design/reflective_pose_detector.md](../design/reflective_pose_detector.md)
 
-Status: in progress, opened 2026-09-08.
+Status: implemented, opened 2026-09-08.
 
 The design is agreed. This phase is the execution: five packages, one config
 file, a node split on the detect/decide seam, and a CLI that no longer needs ROS.
@@ -20,17 +20,18 @@ The contract every other item codes against, so it lands first and alone.
 - `packages/` with five directories, each carrying `pyproject.toml`; `core`,
   `sim` and `cli` additionally carry `package.xml` with `ament_python` so colcon
   sees them and `pip install -e` also works.
-- `packages/reflective_pose_core/data/reflective_pose.yaml` — the canonical
-  config, ported from `config/board_initializer.param.yaml` **with its comments**.
-  Sections: `board`, `detector`, `anchor`, `ros`, `autoware`.
+- `packages/reflective_pose_core/reflective_pose_core/data/detector.yaml` — the
+  canonical detector config, with its comments. Sections: `board`, `detector`,
+  `covariance`; ROS wiring, Autoware policy and floor-fit settings live with
+  their respective consumers.
 - `reflective_pose_core.config` — `load_config(path) -> Config`, plus
   `default_config_path()` resolving `$REFLECTIVE_POSE_CONFIG`, then installed
   package data, then the repo checkout.
 
-**Done when:** `load_config` round-trips the ported YAML into the existing
-`DetectorParams` and `AnchorParams` dataclasses with the same values the current
-flat file produces. A test asserts that equivalence against the old file, so the
-port cannot silently change a threshold.
+**Done when:** `load_config` reads the three-section detector file into typed
+`DetectorParams` and `AnchorParams` values, including the map-only AABB. Tests
+cover the shared board contract and malformed configuration so a typo or a
+changed threshold cannot silently take effect.
 
 ### P2 — `reflective_pose_core`
 

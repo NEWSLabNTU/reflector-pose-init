@@ -4,21 +4,29 @@
   nothing and initializes nothing. Whatever consumes that pose brings its own
   launch file.
 
-  Topics and frames are not arguments here. They live in the config file, which
-  is also what the offline anchoring tool reads, so the map and the runtime
-  guess cannot drift apart by someone overriding one of them on a command line.
-  Point config_file at a copy to change them; remap the subscription if you only
-  need to move a topic.
+  Two files, two jobs. config_file is the detector file (board, gates,
+  covariance), which the offline anchoring tool reads too, so the map and the
+  runtime guess cannot drift apart. params_file is the node's wiring (frames,
+  accumulation, motion guard) as ordinary ROS parameters. The input cloud is
+  neither: it is a remap, like any other subscription.
 -->
 <launch>
   <arg name="config_file"
-       default="$(find-pkg-share reflective_pose_ros)/config/reflective_pose.yaml"/>
+       default="$(find-pkg-share reflective_pose_core)/config/detector.yaml"
+       description="the detector file: board, gates, covariance"/>
+  <arg name="params_file"
+       default="$(find-pkg-share reflective_pose_ros)/config/board_detector.param.yaml"
+       description="the node's wiring: frames, accumulation, motion guard"/>
+  <arg name="input_topic" default="/sensing/lidar/top/pointcloud_raw_ex"
+       description="PointCloud2 with an intensity field"/>
   <!-- The node's name sets its namespace, and so the resolved names of
        ~/board_pose and ~/debug/*. The RViz config expects the default. -->
   <arg name="node_name" default="board_detector"/>
 
   <node pkg="reflective_pose_ros" exec="board_detector_node"
         name="$(var node_name)" output="screen">
+    <param from="$(var params_file)"/>
     <param name="config_file" value="$(var config_file)"/>
+    <remap from="~/input/pointcloud" to="$(var input_topic)"/>
   </node>
 </launch>

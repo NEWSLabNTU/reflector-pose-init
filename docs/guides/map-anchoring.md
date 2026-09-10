@@ -8,13 +8,6 @@ Detection reuses the same detector the node runs, so the board pose defining the
 map and the board pose the vehicle computes at startup come from identical code:
 a detector bias cancels instead of appearing as a localization error.
 
-## Before you start
-
-Build and source the workspace as described in
-[getting started](getting-started.md), then prepare a user-owned configuration
-with [configuring the detector](configuring.md). The map and runtime commands
-must use the same `board:` dimensions and `board.pose_in_map` values.
-
 ## Procedure
 
 1. Build a SLAM map and export its cloud as `.ply` or `.pcd` **with the
@@ -25,17 +18,14 @@ must use the same `board:` dimensions and `board.pose_in_map` values.
 4. Merge `board_polygon.osm` into the route's `lanelet2_map.osm`, then tile the
    cloud with `autoware_pointcloud_divider`.
 
-After building and sourcing the ROS 2 workspace, run the CLI through its ROS 2
-package with `ros2 run reflective_pose_cli anchor-map-to-board`:
-
 ```bash
 # inspect; writes nothing
-ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
-    --config /path/to/reflective_pose.yaml --dry-run
+anchor-map-to-board slam_export.ply -o /path/to/map \
+    --config /path/to/detector.yaml --dry-run
 
 # write the map artifacts
-ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
-    --config /path/to/reflective_pose.yaml
+anchor-map-to-board slam_export.ply -o /path/to/map \
+    --config /path/to/detector.yaml
 ```
 
 ## Options
@@ -45,37 +35,34 @@ ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map
 | `cloud` | required | input `.ply` or `.pcd`; must carry `intensity` |
 | `-o`, `--output-dir` | required | directory for the generated artifacts |
 | `--name` | `pointcloud_map.pcd` | output cloud filename |
-| `--config` | packaged `reflective_pose.yaml` | board and detector settings |
+| `--config` | packaged `detector.yaml` | board, detector gates, covariance |
+| `--floor-band`, `--floor-percentile`, `--floor-inlier`, `--floor-refits`, `--max-floor-tilt-deg` | `AnchorParams` | the floor fit; see [configuration](../configuration.md) |
 | `--dry-run` | off | report the result, write nothing |
 | `--dump-debug PATH` | off | write an `.npz` for `anchor_debug_viewer` |
 
-`--config` is the source of truth. It supplies the map detector policy, the
-shared physical board dimensions, and `board.pose_in_map`; there are
-deliberately no CLI overrides for them. Pass the exact file the vehicle will
-load when building a deployment map. The runtime policy is read from the same
-file but is not applied to the map.
+`--config` is the source of truth. It supplies the detector gates, the physical
+board dimensions and `board.pose_in_map`; there are deliberately no CLI
+overrides for them. Pass the exact file the vehicle will load when building a
+deployment map.
 
-If the exported map contains too much of the surrounding building, set the
-optional `detector.map.aabb` in that YAML file:
+## Restrict the map search
+
+For a large map, add the optional `detector.map_aabb` crop to the same detector
+file:
 
 ```yaml
 detector:
-  map:
-    aabb:
-      min: [-5.0, -3.0, 0.0]
-      max: [ 5.0,  3.0, 2.0]
+  map_aabb:
+    min: [-.inf, -5.0, 0.5]
+    max: [12.0, .inf, 1.65]
 ```
 
-The bounds are inclusive and use the levelled, floor-zero `map_debug` frame —
-after floor fitting and before final board placement. They are not raw PLY
-coordinates and are not final anchored-map coordinates. Floor fitting, the
-room-centre viewpoint, and the exported map still use the full cloud; only
-detection input is cropped. Because floor levelling does not establish a
-canonical XY origin or heading, choose the bounds from a debug view and expect
-to retune them when the SLAM export frame changes. Set an individual coordinate
-to `-.inf` on a lower bound or `.inf` on an upper bound when that side should
-be unbounded. Omit `aabb` (or use `aabb: null`) to disable the entire crop.
-The legacy `aabb: null` spelling remains accepted for backwards compatibility.
+The bounds are inclusive and are evaluated in the floor-levelled,
+floor-zero `map_debug` frame. Use `-.inf` for an unbounded lower side and
+`.inf` for an unbounded upper side. Do not use `null` for an individual
+coordinate; omit `map_aabb` when the crop is not needed. The crop filters only
+the detector input: floor fitting, viewpoint calculation, and the output map
+still use the complete cloud. The live detector ignores this map-only setting.
 
 ## What it writes
 
@@ -104,7 +91,7 @@ second reflector, but matching sixty centroids against the cloud by hand is
 slow. Dump and view instead:
 
 ```bash
-ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
+anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
     --dump-debug /tmp/anchor.npz
 
 ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
@@ -114,8 +101,7 @@ rviz2 -d packages/reflective_pose_ros/rviz/anchor_debug.rviz    # Fixed Frame: m
 The viewer publishes, latched:
 
 - `map_cloud` — the full cloud in the gravity-levelled frame detection actually
-  came from, coloured by intensity, so the retroreflector band is visible. It
-  remains full even when `detector.map.aabb` crops detector input.
+  ran on, coloured by intensity, so the retroreflector band is visible
 - `board_points` — the accepted board's points, or every ambiguous candidate's
 - `rejected` — one text marker per rejected cluster at its centroid, with reason
   and point count; an arrow along the accepted board's normal when there was
@@ -136,16 +122,9 @@ separate viewer rather than inline.
   `[x, y, z, roll, pitch, yaw]`, angles in radians, rotation
   `Rz(yaw) @ Ry(pitch) @ Rx(roll)`.
 - `map_projector_info.yaml` must use `projector_type: Local`.
-- `detector.map.board_centre_height` is a map-local gate measured from the
-  fitted floor. `detector.runtime.board_centre_height` is a separate gate in
-  `base_link`; it may be derived from the shared board height and the vehicle's
-  floor-to-`base_link` offset.
-- `detector.map.aabb`, when enabled, is a map-only inclusive spatial gate in
-  the levelled, floor-zero `map_debug` frame. It does not alter floor fitting,
-  viewpoint calculation, or the full cloud written to the map.
-- `board.pose_in_map[2]` is the authoritative board placement in the anchored
-  map and is shared with runtime initialization. It is not used as a substitute
-  for the map's trial-tuned height gate.
+- `board.centre_height` and `board.pose_in_map[2]` are different quantities: the
+  physical mounting height above the floor, and a map coordinate. Keep them
+  equal for a floor-level map.
 - Moving the board, changing its face dimensions, or rebuilding the map
   invalidates the old pose. Re-anchor or resurvey, then repeat
   [rosbag validation](rosbag-validation.md).

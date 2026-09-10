@@ -6,7 +6,7 @@
   <description>
     Autoware handoff for the reflective board detector: gates on VelocityReport,
     spends the attempt budget, applies the fallback policy, and calls
-    tier4_localization_msgs/InitializeLocalization.
+    autoware_localization_msgs/InitializeLocalization.
 
     This is the only package in the repository that depends on Autoware, and it
     is the reason the other four do not. Anything added here that does not need
@@ -26,7 +26,7 @@
   <depend>reflective_pose_ros</depend>
 
   <!-- The two Autoware dependencies this package exists to contain. -->
-  <depend>tier4_localization_msgs</depend>
+  <depend>autoware_localization_msgs</depend>
   <depend>autoware_vehicle_msgs</depend>
 
   <test_depend>python3-pytest</test_depend>

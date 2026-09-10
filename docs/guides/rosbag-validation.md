@@ -6,8 +6,9 @@ stationary view of the board.
 ## Preconditions
 
 - Input is `sensor_msgs/PointCloud2` with `x`, `y`, `z` and `intensity`.
-- The cloud's `header.frame_id` matches `ros.sensor_frame`.
-- A static TF from `ros.base_frame` to `ros.sensor_frame` is available. Use the
+- The cloud's `header.frame_id` matches `sensor_frame` in
+  `board_detector.param.yaml`.
+- A static TF from `base_frame` to `sensor_frame` is available. Use the
   recorded `/tf_static`, or publish the sensor's calibrated transform when the
   bag lacks it.
 - The vehicle is stationary while scans accumulate.
@@ -18,19 +19,20 @@ settings. Set them for the site before validating — see
 
 ## Procedure
 
-A bag's topic and frame rarely match the vehicle's, and they are config rather
-than launch arguments — the anchoring tool reads the same file, so neither can be
-moved from a command line while the other stays put. Copy the config and edit
-`ros.input_topic` and `ros.sensor_frame`:
+A bag's topic and frame rarely match the vehicle's. The topic is a remap and
+the frame a ROS parameter, so both are launch arguments; the detector file
+(`config_file`) describes the board and the gates and is the one the anchoring
+tool shares, so it is left alone here:
 
 ```bash
-ros2 pkg prefix reflective_pose_ros   # its share/config/reflective_pose.yaml
-cp .../share/reflective_pose_ros/config/reflective_pose.yaml /tmp/bag.yaml
-$EDITOR /tmp/bag.yaml
-
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/tmp/bag.yaml
+    input_topic:=/the/bags/points \
+    config_file:=/path/to/detector.yaml \
+    params_file:=/path/to/board_detector.param.yaml   # sensor_frame, accumulate_scans
 ```
+
+The shipped `params_file` says `velodyne`; a bag whose `frame_id` differs needs
+a copy with `sensor_frame` changed.
 
 Play the bag in another terminal:
 
@@ -54,9 +56,10 @@ ros2 topic echo /diagnostics
 
 - `~/debug/board_points` contains only accepted board points.
 - `~/board_pose` appears, carrying the pose and its covariance.
-- The log reports range, point count, extents, centre constraints, and the
-  computed map `x`, `y`, `z` and yaw.
-- Diagnostics reach `OK` with state `done`.
+- The log reports range, point count, extents, centre constraints, the
+  confidence with its terms, and the computed map `x`, `y`, `z` and yaw.
+- Diagnostics reach `OK` with state `detected`, and carry `confidence` and
+  `confidence.*` keys on every attempt.
 
 Record each run: bag name, measured board distance, configured dimensions and
 height, calculated pose, independently expected pose, pass or fail. That makes
@@ -67,12 +70,15 @@ calibration and map changes comparable across sessions.
 | Result | Behaviour | First checks |
 |---|---|---|
 | `NO_CANDIDATE` | retries each accumulation batch | intensity field and band, topic and frame, TF, range and height gates, the rejected-cluster labels |
-| `AMBIGUOUS` | fails immediately, never picks | a second reflector, reflective sign or tape, board dimensions, the RViz candidate labels |
+| `AMBIGUOUS` | publishes nothing for that batch, never picks, retries the next batch | a second reflector, reflective sign or tape, board dimensions, the `candidate_N` diagnostic values and the RViz candidate labels |
+| `low confidence` | publishes nothing for that batch, retries the next batch | the `confidence.*` diagnostic values name the weak term: a hidden edge (`edges`), a smeared or clipped extent (`extent`), too few or too many returns (`density`) |
 | no pose published at all | detector never converged | run the [desk test](desk-test.md) to separate a config problem from a data problem |
 | `service unavailable` | the Autoware node fails after a 5 s wait | start the localization stack; check `/localization/initialize` |
 
-`FAILED` is terminal. Correct the setup and restart the node; it does not retry
-after failure.
+No outcome is terminal: every batch is judged on its own, so a transient
+second reflector or a weak view costs one batch, not the run. `/diagnostics`
+is `OK` only while the *last* batch published a pose; a board found and then
+lost reads `WARN` with the reason.
 
 Debug topics are transient-local. Read them against diagnostics and the current
 log, since latched markers can otherwise look current.
@@ -91,6 +97,6 @@ ros2 service list | grep '^/localization/initialize$'
 ```
 
 Requires an anchored map or a surveyed `board.pose_in_map`, exact sensor TF, and
-the board mounted where the map was built. Set `ros.twist_topic` so the detector
+the board mounted where the map was built. Set `twist_topic` so the detector
 discards scans taken while the cart is moving. This launch is standalone: the
 parent vehicle launch must start map loading separately.

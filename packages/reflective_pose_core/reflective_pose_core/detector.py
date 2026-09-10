@@ -93,7 +93,7 @@ class DetectorParams:
     """Detection thresholds.
 
     The defaults here are a starting point, not the deployed values: those live
-    in reflective_pose.yaml and are loaded through reflective_pose_core.config.
+    in detector.yaml and are loaded through reflective_pose_core.config.
     """
 
     # Stage 1 gates
@@ -127,6 +127,11 @@ class DetectorParams:
     density_max_ratio: float = 1.4
     density_check_enabled: bool = True
 
+    # The confidence gate. detect_board reports every survivor's confidence
+    # and applies no threshold itself; the node refuses to publish a pose
+    # below this. See confidence_terms for what goes into the number.
+    min_confidence: float = 0.6
+
     # Sensor model. The elevation table drives both the density gate and the
     # edge-observation margins; without it the density gate is skipped, because
     # a mean-step approximation is wrong by 3x across the working range.
@@ -140,6 +145,10 @@ class DetectorParams:
     # Metadata for the height gate's coordinate frame. The transform supplied
     # to detect_board must map sensor points into this frame.
     height_reference: str = "base_link"
+
+    # Optional map-only spatial crop. ``detect_board`` does not consume this;
+    # ``anchor_cloud`` applies it to detection input after floor levelling.
+    map_aabb: Optional[Aabb] = None
 
     # Stage 4
     edge_margin_scale: float = 1.5  # multiples of local point spacing
@@ -178,6 +187,12 @@ class BoardDetection:
     plane_residual: float  # RMS distance to the fitted plane
     range_m: float
     observed_edges: Dict[str, bool]  # left / right / bottom / top
+    # One scalar in [0, 1] from the terms below, and the terms themselves so
+    # a consumer can say which one dragged it down. Filled in by
+    # _evaluate_cluster; the defaults exist so a detection can be built by
+    # hand in a test.
+    confidence: float = 0.0
+    confidence_terms: Dict[str, float] = field(default_factory=dict)
 
     @property
     def centre_constrained(self) -> Tuple[bool, bool]:
@@ -332,6 +347,104 @@ def _observed_edges(
     }
 
 
+#: The terms of the confidence scalar, and their weights in it. Every term is
+#: in [0, 1] with 1 meaning "as good as this measurement gets".
+#:
+#: edges carries twice the weight of the others because an unobserved bounding
+#: edge is the one defect that biases the *centre* -- by up to half the hidden
+#: width -- rather than merely widening the covariance. range carries half:
+#: precision degrades with distance, but a clean board at 12 m is still a
+#: clean board, and the covariance already grows with range.
+CONFIDENCE_TERMS: Dict[str, float] = {
+    "planarity": 1.0,
+    "extent": 1.0,
+    "density": 1.0,
+    "edges": 2.0,
+    "range": 0.5,
+}
+
+
+def _unit(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def confidence_terms(detection: BoardDetection, params: DetectorParams) -> Dict[str, float]:
+    """Each confidence term of a detection, in [0, 1], keyed by name.
+
+    All of them are things the gates already measured, re-expressed as "how
+    far inside the gate did this land":
+
+    - ``planarity``: 1 for a residual anywhere below half of
+      ``planarity_max_thickness``, falling to 0 at the gate. The gate is set
+      at a few times the sensor's range noise, and a residual at the noise
+      floor is as flat as a board can measure; scoring it against zero would
+      mark a clean board down for the sensor it was seen with.
+    - ``extent``: 1 at the nominal size; 0 at the edge of ``extent_tolerance``
+      on whichever side the error is, each axis; the worse axis counts. An
+      extent is measured from samples, so it falls short of the object by up
+      to one sample spacing per axis -- the same spacing ``_observed_edges``
+      allows -- and that much under-read is forgiven. Over-read is not: a
+      sampled object cannot measure larger than it is, so an excess is
+      evidence (a frame, a halo, a neighbour) and counts in full.
+    - ``density``: the return count against what the sensor model expects for
+      this range and height. Under-dense scores the ratio itself (an oblique
+      or partly hidden board returns fewer points); over-dense falls linearly
+      to 0 at ``density_max_ratio``. Absent when the model has no rows for the
+      board, exactly when the density gate is skipped.
+    - ``edges``: the fraction of the four bounding edges observed.
+    - ``range``: 1 at ``range_min``, 0 at ``range_max``.
+    """
+    terms: Dict[str, float] = {}
+
+    terms["planarity"] = _unit(
+        2.0 * (1.0 - detection.plane_residual / max(params.planarity_max_thickness, 1e-9))
+    )
+
+    lo, hi = params.extent_tolerance
+    spacings = (
+        detection.range_m * params.azimuth_step_rad,
+        detection.range_m * params.mean_elevation_step_rad,
+    )
+    worst = 0.0
+    for measured, nominal, spacing in zip(
+        detection.extents, (params.board_width, params.board_height), spacings
+    ):
+        nominal = max(nominal, 1e-9)
+        if measured < nominal:
+            error = max(nominal - measured - spacing, 0.0) / (nominal * max(1.0 - lo, 1e-9))
+        else:
+            error = (measured - nominal) / (nominal * max(hi - 1.0, 1e-9))
+        worst = max(worst, error)
+    terms["extent"] = _unit(1.0 - worst)
+
+    expected = _expected_point_count(
+        params, detection.range_m, float(detection.centre[2])
+    )
+    if expected is not None:
+        ratio = detection.n_points / expected
+        if ratio <= 1.0:
+            terms["density"] = _unit(ratio)
+        else:
+            terms["density"] = _unit(
+                1.0 - (ratio - 1.0) / max(params.density_max_ratio - 1.0, 1e-9)
+            )
+
+    terms["edges"] = sum(1.0 for seen in detection.observed_edges.values() if seen) / 4.0
+
+    span = max(params.range_max - params.range_min, 1e-9)
+    terms["range"] = _unit(1.0 - (detection.range_m - params.range_min) / span)
+
+    return terms
+
+
+def confidence_from_terms(terms: Dict[str, float]) -> float:
+    """Weighted mean of the terms present, by ``CONFIDENCE_TERMS``."""
+    total = sum(CONFIDENCE_TERMS[name] for name in terms)
+    if total <= 0.0:
+        return 0.0
+    return float(sum(CONFIDENCE_TERMS[name] * value for name, value in terms.items()) / total)
+
+
 def _evaluate_cluster(
     points: np.ndarray,
     params: DetectorParams,
@@ -420,6 +533,8 @@ def _evaluate_cluster(
         range_m=range_m,
         observed_edges=edges,
     )
+    detection.confidence_terms = confidence_terms(detection, params)
+    detection.confidence = confidence_from_terms(detection.confidence_terms)
     return detection, None
 
 

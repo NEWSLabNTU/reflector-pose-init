@@ -4,10 +4,16 @@ This node detects and publishes. It does not decide. Subscribe to a cloud, look
 up TF, accumulate scans, run ``reflective_pose_core.detect_board``, and publish
 
 * ``~/board_pose``  -- ``geometry_msgs/PoseWithCovarianceStamped``, latched,
-  the vehicle pose in ``map`` with the covariance the detection earns
+  the vehicle pose in ``map`` with the covariance the detection earns, for
+  every batch whose lone survivor clears ``detector.min_confidence``
 * ``~/debug/*``     -- the board points, the board pose in the sensor frame,
   and a per-cluster rejection marker for every cluster that was discarded
-* ``/diagnostics``  -- state and attempt count, once a second
+* ``/diagnostics``  -- the last batch's verdict (see ``decision.judge``) with
+  its confidence terms, plus state and attempt counts, once a second
+
+No outcome is terminal. An ambiguous batch and a low-confidence batch each
+suppress their own pose, say so on /diagnostics, and the next batch is
+processed like any other; ``decision.py`` carries the reasoning.
 
 What happens to that pose afterwards is somebody else's problem: whether the
 vehicle is stopped enough to trust it, how many attempts are worth making, and
@@ -22,10 +28,17 @@ message this package cannot depend on, so the guard moved out with the policy: a
 consumer that cares must gate on its own speed source before acting on a pose
 published here.
 
-Configuration is one file, not thirty parameters -- see the ``config_file``
-parameter below.
+Two kinds of setting, taken two ways. What the detector *looks for* -- the
+board, the gates, the covariance -- is the detector file, one parameter
+(``config_file``), because the offline anchoring tool reads the same file and
+the two must not be able to drift apart through a launch override. Where the
+node is *plugged in* -- frames, accumulation, the motion guard -- is ordinary
+ROS parameters (``NodeParams``), shipped as ``config/board_detector.param.yaml``.
+The input cloud is not a parameter at all: it is ``~/input/pointcloud``, and a
+launch file remaps it.
 """
 
+from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from enum import Enum
@@ -43,7 +56,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from reflective_pose_core.config import load_config
-from reflective_pose_core.detector import Status, detect_board
+from reflective_pose_core.detector import detect_board
 from reflective_pose_core.geometry import (
     CovarianceParams,
     covariance_from_detection,
@@ -55,13 +68,42 @@ from reflective_pose_core.geometry import (
 )
 
 from .debug_viz import board_pose_stamped, detection_points_cloud, rejection_marker_array
+from .decision import Verdict, judge
+
+
+@dataclass
+class NodeParams:
+    """Wiring. Declared as ROS parameters, one per field, defaults as written."""
+
+    sensor_frame: str = "velodyne"
+    base_frame: str = "base_link"
+    # Feeds DetectorParams.scan_count. The expected return count scales with
+    # it, so a node accumulating 10 scans against a detector assuming 1 rejects
+    # every real board as ten times too dense. Set here once; load_config
+    # derives the rest.
+    accumulate_scans: int = 10
+    # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
+    # batch taken while the vehicle rolls is smeared and the board's extents
+    # measure wrong. Empty disables the guard: right on a bench, wrong on a
+    # vehicle. nav_msgs/Odometry and geometry_msgs/TwistStamped are both
+    # accepted; the node picks by the topic's advertised type.
+    twist_topic: str = ""
+    max_speed_for_accumulation: float = 0.05
+
+
+def declare_node_params(node: Node) -> NodeParams:
+    """Declare every ``NodeParams`` field as a parameter and read it back."""
+    values = {}
+    for item in dataclass_fields(NodeParams):
+        node.declare_parameter(item.name, item.default)
+        values[item.name] = node.get_parameter(item.name).value
+    return NodeParams(**values)
 
 
 class State(Enum):
     WAIT_TF = "wait_tf"
     ACCUMULATE = "accumulate"
     DETECTED = "detected"
-    FAILED = "failed"
 
 
 def covariance_params_from_config(config) -> CovarianceParams:
@@ -83,31 +125,31 @@ def covariance_params_from_config(config) -> CovarianceParams:
 class BoardDetectorNode(Node):
     """Detect the board, compose the vehicle pose, publish it."""
 
-    def __init__(self):
-        super().__init__("board_detector")
+    def __init__(self, **node_kwargs):
+        super().__init__("board_detector", **node_kwargs)
 
-        # The only parameter. Empty means "wherever core says the canonical
-        # file lives": $REFLECTIVE_POSE_CONFIG, then the installed package
-        # data, then the checkout.
+        # The detector file. Empty means "wherever core says the default
+        # lives": $REFLECTIVE_POSE_CONFIG, then the installed package data,
+        # then the checkout.
         self.declare_parameter("config_file", "")
         path = self.get_parameter("config_file").value or None
+        self._params = declare_node_params(self)
 
-        self._config = load_config(path)
-        # Resolve the runtime policy explicitly. The map CLI resolves a
-        # separate policy from the same board contract; sharing a flat
-        # DetectorParams here would make its base_link height and scan-density
-        # gates leak into offline map anchoring.
-        self._detector_params = self._config.runtime_detector
+        self._config = load_config(path, scan_count=self._params.accumulate_scans)
+        self._detector_params = self._config.detector
+        # The gate on what gets published. Part of the detector file, beside
+        # the gates that decide what counts as a candidate at all.
+        self._min_confidence = float(self._config.detector.min_confidence)
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
-        self._accumulate_scans = int(self._config.ros.accumulate_scans)
+        self._accumulate_scans = int(self._params.accumulate_scans)
 
         # Stacking scans assumes a stationary sensor: nothing deskews them, so a
         # batch taken while the vehicle rolls is smeared and the board's extents
         # measure wrong. The all-in-one node got this from the Autoware velocity
         # gate; keeping it here, on a std message type, is what lets the gate
         # survive the split without the detector learning about Autoware.
-        self._max_speed = float(self._config.ros.max_speed_for_accumulation)
+        self._max_speed = float(self._params.max_speed_for_accumulation)
         self._speed = 0.0
         self._twist_sub = None
 
@@ -116,20 +158,22 @@ class BoardDetectorNode(Node):
         self._detections = 0
         self._scans = []
         self._transform_base_sensor: Optional[np.ndarray] = None
-        self._last_reason = ""
+        self._last_verdict: Optional[Verdict] = None
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        self._subscribe_twist(self._config.ros.twist_topic)
+        self._subscribe_twist(self._params.twist_topic)
 
         sensor_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=5,
         )
+        # A fixed name under the node, remapped by whoever launches it. A
+        # parameter would be a second way to say the same thing.
         self._cloud_sub = self.create_subscription(
-            PointCloud2, self._config.ros.input_topic, self._on_cloud, sensor_qos
+            PointCloud2, "~/input/pointcloud", self._on_cloud, sensor_qos
         )
 
         latched = QoSProfile(
@@ -149,9 +193,10 @@ class BoardDetectorNode(Node):
 
         self.create_timer(1.0, self._publish_diagnostics)
         self.get_logger().info(
-            f"board_detector reading {self._config.ros.input_topic}, "
-            f"waiting for {self._config.ros.base_frame} <- "
-            f"{self._config.ros.sensor_frame}"
+            f"board_detector reading {self._cloud_sub.topic_name}, "
+            f"waiting for {self._params.base_frame} <- {self._params.sensor_frame}; "
+            f"board {self._config.board.width:.2f} x {self._config.board.height:.2f} m "
+            f"at {list(self._config.board.pose_in_map)}"
         )
 
     def _board_transform(self) -> np.ndarray:
@@ -169,7 +214,7 @@ class BoardDetectorNode(Node):
         """
         if not topic:
             self.get_logger().warn(
-                "ros.twist_topic is empty: scans will be accumulated regardless "
+                "twist_topic is empty: scans will be accumulated regardless "
                 "of vehicle motion. Correct on a bench; on a vehicle this "
                 "silently smears the board's extents."
             )
@@ -203,9 +248,6 @@ class BoardDetectorNode(Node):
     # -- callbacks ----------------------------------------------------------
 
     def _on_cloud(self, msg: PointCloud2):
-        if self._state is State.FAILED:
-            return
-
         if self._transform_base_sensor is None:
             self._transform_base_sensor = self._lookup_transform()
             if self._transform_base_sensor is None:
@@ -234,8 +276,8 @@ class BoardDetectorNode(Node):
         self._attempt_detection(points, intensity, msg.header.frame_id)
 
     def _lookup_transform(self) -> Optional[np.ndarray]:
-        base = self._config.ros.base_frame
-        sensor = self._config.ros.sensor_frame
+        base = self._params.base_frame
+        sensor = self._params.sensor_frame
         try:
             stamped = self._tf_buffer.lookup_transform(base, sensor, rclpy.time.Time())
         except Exception as error:  # tf2 raises several unrelated types
@@ -274,40 +316,13 @@ class BoardDetectorNode(Node):
         )
         self._publish_clusters(result, frame_id)
 
-        if result.status is Status.AMBIGUOUS:
-            # The map holds one board. A second survivor means that assumption
-            # is broken, and choosing between them would produce a confident
-            # wrong pose, so this failure is terminal rather than retried.
-            details = "; ".join(
-                f"{candidate.range_m:.1f} m, {candidate.n_points} pts, "
-                f"{candidate.extents[0]:.2f}x{candidate.extents[1]:.2f}"
-                for candidate in result.candidates
-            )
-            rejected = ", ".join(
-                f"{rejection.reason} {rejection.detail}".strip()
-                for rejection in result.rejections
-            )
-            self._fail(
-                f"ambiguous: {len(result.candidates)} board candidates survived "
-                f"gating [{details}] out of {result.n_clusters} clusters "
-                f"(rejected: {rejected or 'none'})"
-            )
-            return
-
-        if result.status is not Status.OK:
+        verdict = judge(result, self._min_confidence)
+        self._last_verdict = verdict
+        if not verdict.publish:
             # No attempt budget here: the node keeps looking, and a consumer
             # that wants to give up after N tries counts the poses it did not
             # receive. Giving up is policy.
-            reasons = ", ".join(
-                f"{rejection.reason} {rejection.detail}".strip()
-                for rejection in result.rejections
-            )
-            reason = (
-                f"no candidate (retro points {result.n_after_gates}, "
-                f"clusters {result.n_clusters}): {reasons or 'nothing clustered'}"
-            )
-            self.get_logger().warn(f"attempt {self._attempts}: {reason}")
-            self._last_reason = reason
+            self.get_logger().warn(f"attempt {self._attempts}: {verdict.message}")
             return
 
         detection = result.detection
@@ -322,7 +337,8 @@ class BoardDetectorNode(Node):
         yaw = float(np.arctan2(pose[1, 0], pose[0, 0]))
         self.get_logger().info(
             "board detected at %.1f m, %d points, extents %.2f x %.2f, "
-            "centre constrained h=%s v=%s, pose: x=%.3f y=%.3f z=%.3f yaw=%.2f rad (%.1f deg)"
+            "centre constrained h=%s v=%s, confidence %.2f (%s), "
+            "pose: x=%.3f y=%.3f z=%.3f yaw=%.2f rad (%.1f deg)"
             % (
                 detection.range_m,
                 detection.n_points,
@@ -330,6 +346,8 @@ class BoardDetectorNode(Node):
                 detection.extents[1],
                 horizontal_ok,
                 vertical_ok,
+                detection.confidence,
+                " ".join(f"{k}={v:.2f}" for k, v in detection.confidence_terms.items()),
                 px,
                 py,
                 pz,
@@ -341,7 +359,6 @@ class BoardDetectorNode(Node):
         self._board_pose_pub.publish(self._pose_message(pose, covariance))
         self._detections += 1
         self._state = State.DETECTED
-        self._last_reason = f"board detected, pose published ({self._detections})"
 
     def _pose_message(
         self, pose: np.ndarray, covariance: np.ndarray
@@ -359,11 +376,6 @@ class BoardDetectorNode(Node):
         message.pose.pose.orientation.w = w
         message.pose.covariance = covariance.reshape(-1).tolist()
         return message
-
-    def _fail(self, reason: str):
-        self._state = State.FAILED
-        self._last_reason = reason
-        self.get_logger().error(reason)
 
     # -- debug output -------------------------------------------------------
     #
@@ -396,18 +408,22 @@ class BoardDetectorNode(Node):
         status = DiagnosticStatus()
         status.name = "localization: board_detector"
         status.hardware_id = "board_detector"
-        if self._state is State.DETECTED:
-            status.level = DiagnosticStatus.OK
-        elif self._state is State.FAILED:
-            status.level = DiagnosticStatus.ERROR
-        else:
+        # The level follows the last batch, not the best one: a board found
+        # ten batches ago and lost since is a WARN with a reason, not an OK.
+        verdict = self._last_verdict
+        if verdict is None:
             status.level = DiagnosticStatus.WARN
-        status.message = self._last_reason or self._state.value
+            status.message = self._state.value
+        else:
+            status.level = verdict.level
+            status.message = verdict.message
         status.values = [
             KeyValue(key="state", value=self._state.value),
             KeyValue(key="attempts", value=str(self._attempts)),
             KeyValue(key="detections", value=str(self._detections)),
         ]
+        if verdict is not None:
+            status.values += [KeyValue(key=key, value=value) for key, value in verdict.values]
 
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()

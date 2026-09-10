@@ -33,7 +33,9 @@ poses observed while the vehicle is moving.
 
 ```bash
 ros2 launch reflective_pose_autoware board_pose_initializer.launch.xml \
-    config_file:=/home/you/reflective_pose.yaml
+    config_file:=/home/you/detector.yaml \
+    detector_params_file:=/path/to/board_detector.param.yaml \
+    initializer_params_file:=/path/to/board_pose_initializer.param.yaml
 ```
 
 This starts both nodes under the `/localization` namespace:
@@ -42,10 +44,12 @@ This starts both nodes under the `/localization` namespace:
   board, and publishes `/localization/board_detector/board_pose`;
 - `reflective_pose_autoware/board_pose_initializer` subscribes to that latched
   pose, applies its speed and attempt policy, and calls
-  `autoware.initialize_service`.
+  `initialize_service`.
 
-Both nodes must receive the same configuration file. The shared `board:` block
-is what keeps the board placement used by detection consistent with the map.
+Both nodes receive the same detector file. The shared `board:` block keeps the
+board placement used by detection consistent with the map. The detector wiring
+and initializer policy are separate ROS parameter files so each node owns only
+the settings it can interpret.
 
 ## What happens after detection
 
@@ -71,21 +75,22 @@ ros2 service list | grep '^/localization/initialize$'
 ```
 
 The two nodes publish diagnostics with their own state. A detector diagnostic
-stuck in `wait_tf`, `accumulate`, or `failed` is a perception/setup problem. A
-detector pose with an initializer state such as `service unavailable` is an
-Autoware handoff problem.
+stuck in `wait_tf` or `accumulate` is a perception/setup problem. A detector
+pose with an initializer state such as `service unavailable` is an Autoware
+handoff problem.
 
 ## Configure retry and fallback policy
 
-The `autoware` section controls the handoff, not the detector:
+The initializer's ROS parameter file controls the handoff, not the detector:
 
 ```yaml
-autoware:
-  initialize_service: /localization/initialize
-  max_speed_for_init: 0.05
-  max_attempts: 5
-  fallback_to_user_defined_pose: false
-  pose_wait_timeout: 0.0
+/**:
+  ros__parameters:
+    initialize_service: /localization/initialize
+    max_speed_for_init: 0.05
+    max_attempts: 5
+    fallback_to_user_defined_pose: false
+    pose_wait_timeout: 0.0
 ```
 
 Keep `fallback_to_user_defined_pose` disabled unless sending the configured
@@ -102,9 +107,10 @@ do not expect `max_attempts` or the fallback policy to resolve it.
 - **No board pose:** follow [live detection](live-detection.md) and
   [debugging detection](debugging.md).
 - **Pose published, service unavailable:** start the localization stack or
-  correct `autoware.initialize_service`.
+  correct `initialize_service` in `board_pose_initializer.param.yaml`.
 - **Pose ignored while moving:** stop the vehicle and check both the velocity
-  topic and the detector's `ros.twist_topic` motion guard.
+  topic and the detector's `twist_topic` motion guard in
+  `board_detector.param.yaml`.
 - **Service rejects the pose:** verify that the map was anchored with the same
   board dimensions and `board.pose_in_map`, then inspect the covariance and
   NDT/map configuration.

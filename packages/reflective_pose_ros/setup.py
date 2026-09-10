@@ -14,9 +14,9 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.xml')),
-        # A copy of reflective_pose_core's canonical config, so launch files
-        # have a share/ path to hand the node. test/test_config_copy.py asserts
-        # the two are byte-identical, so the copy cannot drift silently.
+        # The node's wiring parameters. The detector file itself is not
+        # copied here: reflective_pose_core installs its own to share/, and
+        # the launch file points there.
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],

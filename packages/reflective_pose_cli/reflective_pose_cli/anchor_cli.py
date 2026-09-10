@@ -37,12 +37,10 @@ Identity
 ``error``               () unicode — the ``anchor_cloud`` failure message, or
                         ``""`` when anchoring succeeded
 
-The levelled cloud and map crop
+The cloud the detector actually saw
 -----------------------------------
-The context cloud is gravity-levelled with floor at z = 0 — the frame every
-other array here is in, and what the old ``~/debug/map_cloud`` topic carried.
-When a map AABB is enabled, the detector sees only the points inside its
-inclusive bounds; the context cloud remains the full map.
+Gravity-levelled, floor at z = 0 — the frame every other array here is in, and
+what the old ``~/debug/map_cloud`` topic carried.
 
 ``cloud_points``        (N, 3) float32
 ``cloud_intensity``     (N,)   float32
@@ -52,15 +50,15 @@ inclusive bounds; the context cloud remains the full map.
 
 Counts, as the old stderr summary printed them
 ----------------------------------------------
-``aabb_enabled``        () bool — whether a map-only crop was applied
-``aabb_frame``          () unicode — always ``"map_debug"`` when enabled
-``aabb_min``            (3,) float64 — inclusive lower bound, NaN when disabled
+``aabb_enabled``       () bool — whether the map-only crop was applied
+``aabb_frame``         () unicode — always ``"map_debug"`` when enabled
+``aabb_min``           (3,) float64 — inclusive lower bound, NaN when disabled
                         or unbounded on an axis
-``aabb_max``            (3,) float64 — inclusive upper bound, NaN when disabled
+``aabb_max``           (3,) float64 — inclusive upper bound, NaN when disabled
                         or unbounded on an axis
-``n_inside_aabb``       () int32 — points inside the AABB, or all points when disabled
+``n_inside_aabb``      () int32 — points inside the AABB, or all points when disabled
 ``n_after_gates``       () int32 — points passing the AABB (when enabled) and
-                        intensity/range/height gates
+                        intensity/range/height
 ``n_clusters``          () int32 — clusters formed
 ``n_candidates``        () int32 — K, clusters surviving every gate
 ``n_rejections``        () int32 — R
@@ -125,10 +123,10 @@ only the centroid label. Nothing the old picture contained is lost.
 The gates that produced those verdicts
 --------------------------------------
 ``param_names``         (T,) unicode — every numeric scalar of the
-                        resolved map-policy ``DetectorParams`` this run used
+                        ``DetectorParams`` this run used, **after**
+                        ``detector_params_for_map`` relaxed range and density
 ``param_values``        (T,) float64 — parallel to ``param_names``. Booleans are
-                        0.0 / 1.0; these are the resolved map-policy values,
-                        not runtime-node thresholds.
+                        0.0 / 1.0; ``range_max`` is ``inf`` for a map cloud.
 
 The anchoring result (NaN when anchoring failed)
 ------------------------------------------------
@@ -149,9 +147,11 @@ from reflective_pose_core.anchor import (
     anchored_board_centre,
     apply_transform,
     board_polygon_osm,
+    detector_params_for_map,
     transform_yaml,
 )
-from reflective_pose_core.config import default_config_path, load_config
+from reflective_pose_core.anchor import AnchorParams
+from reflective_pose_core.config import anchor_params, default_config_path, load_config
 from reflective_pose_core.detector import Status
 from reflective_pose_core.pointcloud_io import read_cloud, write_pcd
 
@@ -182,7 +182,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=default_config_path(),
-        help="shared reflective_pose.yaml (default: package config)",
+        help=(
+            "the detector file (board, detector gates, covariance); the same "
+            "file the runtime node loads (default: package config)"
+        ),
+    )
+    # The floor fit is a property of one run of one tool, so its knobs are
+    # flags rather than config. The board and the gates stay in the file on
+    # purpose: there is no flag that could move the board.
+    floor = parser.add_argument_group("floor fit")
+    defaults = AnchorParams()
+    floor.add_argument(
+        "--floor-band", type=float, default=defaults.floor_band, metavar="M",
+        help="metres above the lowest points to fit the floor within",
+    )
+    floor.add_argument(
+        "--floor-percentile", type=float, default=defaults.floor_percentile,
+        metavar="PCT", help="percentile of z taken as 'the lowest points'",
+    )
+    floor.add_argument(
+        "--floor-inlier", type=float, default=defaults.floor_inlier, metavar="M",
+        help="refit tolerance, metres",
+    )
+    floor.add_argument(
+        "--floor-refits", type=int, default=defaults.floor_refits, metavar="N",
+        help="how many times the plane is refitted on its inliers",
+    )
+    floor.add_argument(
+        "--max-floor-tilt-deg", type=float, default=defaults.max_floor_tilt_deg,
+        metavar="DEG",
+        help="refuse a cloud whose fitted floor tilts more than this from level",
     )
     parser.add_argument(
         "--dry-run",
@@ -243,6 +272,7 @@ def _print_rejections(
                 f"    {index}. range={candidate.range_m:.2f} m "
                 f"n={candidate.n_points} "
                 f"extents={candidate.extents[0]:.2f}x{candidate.extents[1]:.2f} "
+                f"confidence={candidate.confidence:.2f} "
                 f"centre=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f})",
                 file=stream,
             )
@@ -438,10 +468,10 @@ def write_debug_dump(
     failure path — which is the path the picture is wanted on.
     """
     result = captured["result"]
-    # ``detector_params`` is already the resolved map policy. Do not derive it
-    # from the runtime policy here: map height, clustering, and planarity are
-    # intentionally independent tuning surfaces.
-    params = detector_params
+    # The gates the detector actually ran with: anchoring relaxes range and
+    # density for a merged cloud, so dumping the file's values would show a
+    # viewer limits that were never applied.
+    params = detector_params_for_map(detector_params)
 
     names, values = _numeric_params(params)
     nan = float("nan")
@@ -514,9 +544,16 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as error:
         print(f"error: cannot load config {args.config}: {error}", file=sys.stderr)
         return 2
-    params = config.anchor
-    detector_params = config.map_detector
-    aabb = config.detector.map_aabb
+    params = anchor_params(
+        config,
+        floor_band=args.floor_band,
+        floor_percentile=args.floor_percentile,
+        floor_inlier=args.floor_inlier,
+        floor_refits=args.floor_refits,
+        max_floor_tilt_deg=args.max_floor_tilt_deg,
+    )
+    detector_params = config.detector
+    aabb = detector_params.map_aabb
 
     cloud = read_cloud(args.cloud)
     print(f"read {len(cloud)} points from {args.cloud}")
@@ -593,10 +630,12 @@ def main(argv=None) -> int:
         )
 
     detection = result.detection
+    terms = " ".join(f"{k}={v:.2f}" for k, v in detection.confidence_terms.items())
     print(
         f"board found: {detection.n_points} points, "
         f"extents {detection.extents[0]:.2f} x {detection.extents[1]:.2f} m, "
-        f"plane residual {detection.plane_residual * 100:.1f} cm"
+        f"plane residual {detection.plane_residual * 100:.1f} cm, "
+        f"confidence {detection.confidence:.2f} ({terms})"
     )
     print(f"floor tilt in the source frame: {result.floor_tilt_deg:.2f} deg")
     print("transform (map <- cloud):")

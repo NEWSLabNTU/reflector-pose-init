@@ -13,7 +13,7 @@ The package does four jobs that have four different audiences:
 - an **Autoware handoff**, which is one service call and one gating rule
 
 Today all four live in one `ament_python` package whose `package.xml` depends on
-`tier4_localization_msgs` and `autoware_vehicle_msgs`. That means a person who
+`autoware_localization_msgs` and `autoware_vehicle_msgs`. That means a person who
 wants to detect a retroreflective board in a point cloud must install Autoware,
 and a stack that is not Autoware cannot use the detector at all. Neither is a
 consequence of the algorithm; both are consequences of the packaging.
@@ -39,7 +39,7 @@ packages/
 | `sim` | `simulation/{vlp32_sim,scenes}` | 529 | numpy, core |
 | `cli` | `anchor_cli` | 263 | core |
 | `ros` | `node` (most), `debug_viz`, `scene_publisher` | ~750 | rclpy, core, sim |
-| `autoware` | new, extracted from `node` | ~150 | ros, `tier4_localization_msgs`, `autoware_vehicle_msgs` |
+| `autoware` | new, extracted from `node` | ~150 | ros, `autoware_localization_msgs`, `autoware_vehicle_msgs` |
 
 `core` and `cli` and `sim` carry a `pyproject.toml` **and** a `package.xml` with
 `ament_python`, so `colcon build` sees them and `pip install` also works. That is
@@ -69,7 +69,7 @@ It knows nothing about what anyone does with that pose.
 **`reflective_pose_autoware`** — decides and acts. Subscribes to `~/board_pose`,
 gates on `autoware_vehicle_msgs/VelocityReport` (`max_speed_for_init`), applies
 `max_attempts` and the `fallback_to_user_defined_pose` policy, and calls
-`tier4_localization_msgs/InitializeLocalization`.
+`autoware_localization_msgs/InitializeLocalization`.
 
 Putting the *policy* — when is it safe to initialize, how many times do we try,
 what happens when we fail — in the Autoware package rather than the generic one
@@ -82,87 +82,83 @@ detector node that a non-Autoware stack can run unmodified.
 
 ## Configuration
 
-One canonical YAML, sectioned by consumer. Today's file is a flat
-`/**: ros__parameters` block that `config.py` parses by hand specifically to
-avoid importing ROS — the shape is ROS's, the reader is not. The sections below
-are the four kinds of setting already mixed in that file, separated:
+One detector YAML is shared by the two consumers that need the board contract:
+`board_detector_node` and `anchor-map-to-board`. It has three sections, and
+`config.py` parses it without importing ROS. Wiring belongs to ROS parameter
+files and floor fitting belongs to CLI flags, so no consumer has to ignore
+unrelated sections.
 
 ```yaml
 board:                        # shared truth: runtime AND offline anchoring
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]   # x y z roll pitch yaw, radians
   width: 0.6
   height: 0.6
+  centre_height: 1.3
 
 detector:                     # core
-  intensity_threshold: 150.0
+  intensity_threshold: 100.0
+  range_min: 3.0
+  range_max: 18.0
+  height_min: 0.5
+  height_max: 1.65
+  cluster_tolerance: 0.15
+  cluster_min_points: 60
+  extent_tolerance: [0.8, 1.5]
+  planarity_max_thickness: 0.08
+  verticality_max_dot: 0.25
+  centre_height_tolerance: 0.30
+  density_max_ratio: 1.4
+  density_check_enabled: true
   azimuth_step_rad: 0.0035
-  runtime:                     # heights in base_link
-    height_reference: base_link
-    floor_height_in_frame: -0.265
-    board_centre_height: null  # auto-derive; not an unbounded value
-    range_min: 3.0
-    range_max: 18.0
-    cluster_tolerance: 0.20
-    cluster_min_points: 60
-    extent_tolerance: [0.8, 1.5]
-    planarity_max_thickness: 0.08
-    verticality_max_dot: 0.25
-    density_max_ratio: 1.4
-    density_check_enabled: true
-  map:                        # heights in the fitted map floor frame
-    height_reference: map_floor
-    board_centre_height: 1.0
-    aabb:                      # optional [min, max] crop in map_debug
-      min: [-.inf, -.inf, 0.5]
-      max: [.inf, .inf, 1.5]
-    # To restrict XY as well, replace the infinities with finite map_debug values:
-    #   min: [-5.0, -3.0, 0.0]
-    #   max: [ 5.0,  3.0, 2.0]
-    range_min: 0.0
-    range_max: .inf
-    cluster_tolerance: 0.05
-    cluster_min_points: 60
-    extent_tolerance: [0.8, 1.5]
-    planarity_max_thickness: 0.08
-    verticality_max_dot: 0.25
-    density_max_ratio: 1.4
-    density_check_enabled: false
+  min_confidence: 0.6
+  map_aabb:
+    min: [-.inf, -.inf, 0.5]
+    max: [.inf, .inf, 1.65]
 
-anchor:                       # core, offline path
-  # floor fit and anchoring inputs
-
-ros:                          # reflective_pose_ros
-  input_topic: /sensing/lidar/vlp32/velodyne_points
-  sensor_frame: velodyne
-  base_frame: base_link
-  accumulate_scans: 10
-
-autoware:                     # reflective_pose_autoware
-  initialize_service: /localization/initialize
-  max_speed_for_init: 0.05
-  max_attempts: 5
-  fallback_to_user_defined_pose: false
+covariance:                   # reflective_pose_ros, the guess covariance
   sigma_xy_base: 0.15
   sigma_xy_per_metre: 0.03
   sigma_z: 0.10
   sigma_yaw_base: 0.05
-  covariance_safety_factor: 2.0
+  safety_factor: 2.0
+  unconstrained_axis_sigma: 1.0
 ```
 
-`core` reads `board:`, `detector:` and `anchor:` and ignores the rest. Each ROS
-node reads `board:` plus its own section. The CLI reads `board:`, `detector:` and
-`anchor:`.
+That is the whole file. It is read by the two things that run the detector:
+`board_detector_node` (parameter `config_file`) and `anchor-map-to-board`
+(`--config`). Nothing else reads it and nothing else is in it.
 
-**The ROS nodes declare one parameter, `config_file`, not thirty.** The node
-resolves the path, hands it to `core.load_config`, and that is the only loader in
-the repo.
+`detector.map_aabb` is a map-only inclusive crop, evaluated after floor
+levelling in the floor-zero `map_debug` frame. Use `-.inf` for an unbounded
+lower side and `.inf` for an unbounded upper side. The crop filters detector
+input, while floor fitting, viewpoint calculation, and the anchored output
+cloud use the full map. The live detector ignores this field.
 
-This is a real trade-off and it is worth stating plainly. It gives up per-key
-`ros2 param set` at runtime and the Autoware convention of overriding individual
-parameters from a launch file. It gains one schema, one validator, and one file
-that a library with no ROS dependency can read without knowing what
-`ros__parameters` means. The present code already pays for the current shape by
-hand-parsing around it.
+**Revised 2026-09-10: one file per reader.** The first cut of this design put
+the ROS wiring (`ros:`), the Autoware handoff policy (`autoware:`) and the
+floor-fit knobs (`anchor:`) in the same document, so that one file was read by
+three kinds of consumer and each ignored the sections that were not its own.
+That coupling was the objection: a file for many packages. The sections moved
+to where each consumer already keeps its settings —
+
+- `board_detector_node` takes its wiring (frames, `accumulate_scans`, the
+  motion guard) as ordinary ROS parameters, shipped as
+  `board_detector.param.yaml`. The input cloud is a remap of
+  `~/input/pointcloud`, not a parameter.
+- `board_pose_initializer` takes the handoff policy as ROS parameters,
+  shipped as `board_pose_initializer.param.yaml`, and reads no detector file
+  at all.
+- `anchor-map-to-board` takes the floor fit as flags, with `AnchorParams` as
+  the defaults, and builds its inputs with `core.anchor_params(config, ...)`.
+
+A file from the six-section layout is refused by name, with the message saying
+where each section went. `DetectorParams.scan_count` is passed to the loader by
+the node, since the node is the one thing that knows how many scans it stacks.
+
+What stays from the original trade-off: the board and the gates are still one
+schema, one validator, and one file a ROS-free library reads — and still not
+overridable per key from a launch file, on purpose, because the map was
+anchored against that file.
 
 Comments in the current file carry measurements — the 101-255 retroreflector
 band, the 3 m minimum from the 9.36 degree beam gap, why `density_max_ratio` is
@@ -171,12 +167,16 @@ the values are what they are.
 
 ### Where the file lives
 
-`packages/reflective_pose_core/data/reflective_pose.yaml` is canonical.
+`packages/reflective_pose_core/reflective_pose_core/data/detector.yaml` is the
+packaged default.
 
 - `core.default_config_path()` resolves: `$REFLECTIVE_POSE_CONFIG`, then the
   installed package data, then the repo checkout.
-- `reflective_pose_ros` installs a copy to its `share/` for launch files.
-- A test asserts the two are byte-identical, so the copy cannot drift silently.
+- `reflective_pose_core` installs it to its own `share/config/`, which is what
+  the launch files point at. No copy in another package.
+- The two param files ship with the package whose node reads them, and a test
+  in each package asserts the file names exactly the parameters the node
+  declares.
 
 ## The CLI stays ROS-free
 
@@ -191,16 +191,12 @@ drawn by the same `debug_viz` code, so a map-cloud debug run still looks
 identical to the live node's.
 
 ```
-# In a sourced ROS 2 workspace:
-$ ros2 run reflective_pose_cli anchor-map-to-board cloud.pcd -o map/ \
-    --dump-debug /tmp/anchor.npz
+$ anchor-map-to-board cloud.pcd -o map/ --dump-debug /tmp/anchor.npz
 $ ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
 ```
 
 Two steps instead of one, in exchange for a CLI package that installs and runs
-with no ROS present. In that ROS-free installation, call the console script
-directly as `anchor-map-to-board`; the `ros2 run reflective_pose_cli` prefix is
-the ROS workspace form shown above.
+with no ROS present.
 
 ## Entry points
 

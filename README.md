@@ -4,8 +4,10 @@ Finds a retroreflective board of known size and known position in a LiDAR scan,
 and derives the sensor's pose in the map from it. Intended as a cold-start pose
 source where GNSS is unavailable — indoors, under cover.
 
-One-shot, not a localizer: it runs while the vehicle is stationary and can see
-its board, produces one pose, and stops.
+A cold-start pose source, not a localizer: it publishes a pose for every
+batch of scans in which it finds the board with enough confidence, and nothing
+for the batches in which it does not. Whoever consumes the pose decides when
+the vehicle is stationary enough to act on one.
 
 New users: start with the [guide index](docs/guides/README.md), then follow the
 setup, configuration, runtime, map, and validation guide that matches your
@@ -45,8 +47,9 @@ pip install -e packages/reflective_pose_core -e packages/reflective_pose_cli
 ros2 launch reflective_pose_ros board_detector.launch.xml
 ```
 
-Subscribes to `ros.input_topic` (`sensor_msgs/PointCloud2`, needs `intensity`),
-accumulates `ros.accumulate_scans` of them, detects, and publishes:
+Subscribes to `~/input/pointcloud` (`sensor_msgs/PointCloud2`, needs
+`intensity`; remap it), accumulates `accumulate_scans` of them, detects, and
+publishes:
 
 | Topic | Type |
 |---|---|
@@ -57,9 +60,10 @@ accumulates `ros.accumulate_scans` of them, detects, and publishes:
 It calls no service, so it is safe to run against a live stack. Without hardware,
 see the [desk test](docs/guides/desk-test.md).
 
-Topics and frames are config, not launch arguments — the offline anchoring tool
-reads the same file, so neither can be moved from a command line while the other
-stays put. To point it somewhere else, copy the file and pass it:
+The board contract and detection gates are in the shared detector file. Frames,
+scan accumulation, and the motion guard are ordinary node parameters; the
+input topic is a launch remap. To select a different detector contract, copy
+the file and pass it:
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
@@ -87,7 +91,7 @@ Writes `pointcloud_map.pcd`, `board_anchor.yaml`, `board_polygon.osm` and
 `reflective_pose_ros` publishes a pose and stops there. `reflective_pose_autoware`
 is the part that acts on it: it gates on `autoware_vehicle_msgs/VelocityReport`,
 spends an attempt budget, applies the fallback policy, and calls
-`tier4_localization_msgs/InitializeLocalization` with `method=AUTO` so NDT align
+`autoware_localization_msgs/InitializeLocalization` with `method=AUTO` so NDT align
 refines the guess.
 
 Both nodes together:
@@ -108,16 +112,30 @@ detector carries no Autoware dependency.
 
 ## Configuration
 
-One YAML, six sections, at
-`packages/reflective_pose_core/reflective_pose_core/data/reflective_pose.yaml`.
-Both nodes declare a single `config_file` parameter; the CLI takes `--config`.
+One file per reader. The detector file is what the detector looks for; both
+the node and the anchoring tool read it, so the map and the runtime guess
+cannot drift apart:
+
+```
+packages/reflective_pose_core/reflective_pose_core/data/detector.yaml
+```
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/path/to/reflective_pose.yaml
+    config_file:=/path/to/detector.yaml input_topic:=/my/points
+anchor-map-to-board cloud.ply -o map/ --config /path/to/detector.yaml
 ```
 
-**Set `ros.twist_topic` before running on a vehicle.** Stacking scans assumes a
+Where each node is plugged in — frames, accumulation, the motion guard, the
+Autoware handoff policy — is ordinary ROS parameters, shipped as
+`board_detector.param.yaml` and `board_pose_initializer.param.yaml`. The
+anchoring tool's floor-fit knobs are its own flags.
+
+For a large map, `detector.map_aabb` is an optional inclusive crop in the
+levelled, floor-zero `map_debug` frame. Use `-.inf` for an unbounded lower side
+and `.inf` for an unbounded upper side; the crop affects detection input only.
+
+**Set `twist_topic` before running on a vehicle.** Stacking scans assumes a
 stationary sensor; without a motion source the detector cannot tell and will
 measure a smeared board.
 

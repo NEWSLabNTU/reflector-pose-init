@@ -8,16 +8,18 @@ localization service, so it is the safe first step on a vehicle.
 
 The input must satisfy all of these conditions:
 
-- `ros.input_topic` carries `sensor_msgs/PointCloud2` with `x`, `y`, `z`, and
+- the launch remap `input_topic` carries `sensor_msgs/PointCloud2` with `x`, `y`, `z`, and
   `intensity` fields;
-- the message `header.frame_id` matches `ros.sensor_frame`;
-- TF can resolve `ros.base_frame <- ros.sensor_frame`;
+- the message `header.frame_id` matches `sensor_frame` in
+  `board_detector.param.yaml`;
+- TF can resolve `base_frame <- sensor_frame`;
 - the board is visible and the vehicle is stationary while scans accumulate;
-- the shared `board.pose_in_map`, dimensions, and runtime profile are correct.
+- the shared `board.pose_in_map`, dimensions, and detector gates are correct.
 
-On a vehicle, set `ros.twist_topic` and its speed threshold. Without that
-motion guard, the detector cannot know that stacked scans were collected while
-the vehicle moved and the board may be smeared.
+On a vehicle, set `twist_topic` and `max_speed_for_accumulation` in the
+`board_detector.param.yaml` file. Without that motion guard, the detector
+cannot know that stacked scans were collected while the vehicle moved and the
+board may be smeared.
 
 Prepare a configuration as described in
 [configuring the detector](configuring.md), then build and source the
@@ -32,12 +34,15 @@ source install/setup.bash
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/home/you/reflective_pose.yaml
+    config_file:=/home/you/detector.yaml \
+    params_file:=/path/to/board_detector.param.yaml \
+    input_topic:=/sensing/lidar/top/pointcloud_raw_ex
 ```
 
 The launch file starts `board_detector_node`. It waits for TF, accumulates
-`ros.accumulate_scans` scans, runs the runtime detector, and stops after a
-successful detection or terminal ambiguity/failure.
+`accumulate_scans` scans, runs the detector, and judges each batch
+independently. An ambiguity or low-confidence result suppresses that batch's
+pose and the node continues looking.
 
 The detector-only launch publishes a pose and calls no service. To perform the
 Autoware handoff, use the separate workflow in
@@ -78,12 +83,11 @@ the resolved name is uncertain.
 
 - `wait_tf`: the node has not yet found the configured static transform;
 - `accumulate`: scans are being collected;
-- `detected`: a pose was published;
-- `failed`: an ambiguity or terminal detector error occurred.
+- `detected`: the last judged batch published a pose.
 
-`NO_CANDIDATE` retries another accumulation batch. `AMBIGUOUS` is terminal:
-the node refuses to choose between two board-shaped reflectors. Correct the
-scene or configuration and restart the node.
+`NO_CANDIDATE`, `AMBIGUOUS`, and low confidence all suppress the current pose
+and retry another accumulation batch. The node refuses to choose between two
+board-shaped reflectors, but a transient ambiguity does not latch the node off.
 
 ## First checks when no pose appears
 

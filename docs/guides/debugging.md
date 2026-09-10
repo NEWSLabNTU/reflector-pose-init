@@ -25,7 +25,7 @@ Launch the detector and open the supplied RViz layout:
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/home/you/reflective_pose.yaml
+    config_file:=/home/you/detector.yaml
 
 rviz2 -d "$(ros2 pkg prefix reflective_pose_ros)/share/reflective_pose_ros/rviz/board_detector.rviz"
 ```
@@ -50,7 +50,7 @@ complete ROS 2 executable invocation:
 ```bash
 ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply \
     -o /tmp/anchored-map \
-    --config /home/you/reflective_pose.yaml \
+    --config /home/you/detector.yaml \
     --dry-run --dump-debug /tmp/anchor.npz
 ```
 
@@ -75,7 +75,7 @@ viewpoint calculation, and the output cloud use the full input map.
 
 | Symptom | Meaning | First checks |
 |---|---|---|
-| No pose and `wait_tf` | The detector cannot transform sensor points | `ros.sensor_frame`, `ros.base_frame`, and static TF |
+| No pose and `wait_tf` | The detector cannot transform sensor points | `sensor_frame`, `base_frame`, and static TF |
 | No pose and `accumulate` | Too few scans or no candidate yet | input topic, `accumulate_scans`, intensity, runtime gates |
 | `no candidate` | Reflective clusters failed a gate | rejection reason, height frame, extents, planarity, board dimensions |
 | `AMBIGUOUS` | Multiple board-shaped clusters survived | signs/reflectors in view, map AABB, XY crop, geometry gates |
@@ -87,8 +87,8 @@ viewpoint calculation, and the output cloud use the full input map.
 
 Each rejected cluster gets one label at its centroid. The label contains the
 first geometry gate that rejected that cluster and, when available, the
-measured value. Compare that value with the resolved configuration for the
-same runtime or map profile.
+measured value. Compare that value with the resolved detector configuration
+for the run; map anchoring relaxes only its range and density gates.
 
 | Reason | Label measurement | Meaning | Check first |
 |---|---|---|---|
@@ -113,8 +113,9 @@ already failed an earlier gate.
 
 For offline map runs, `--dump-debug` also stores the resolved map parameters,
 the measured rejection value, and the accepted lower/upper limits in the NPZ
-debug file. This is useful when the YAML contains separate runtime and map
-profiles; do not compare a map rejection against runtime limits.
+debug file. The dump records the parameters that actually ran after map
+anchoring relaxed range and density, so do not compare its rejection against
+the raw YAML values for those two gates.
 
 ## Tune in a safe order
 

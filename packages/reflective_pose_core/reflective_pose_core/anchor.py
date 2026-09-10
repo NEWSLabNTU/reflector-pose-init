@@ -37,13 +37,9 @@ from .pointcloud_io import PointCloud
 
 @dataclass
 class AnchorParams:
-    """Map placement and floor-fit inputs.
+    """Anchoring inputs. Detection gates come from DetectorParams."""
 
-    Detection gates come from the map-specific ``DetectorParams`` resolved by
-    configuration. Keeping them out of this dataclass prevents the anchor
-    transform contract from accidentally becoming a second detector policy.
-    """
-
+    board_centre_height: float = 1.075
     board_width: float = 0.8
     board_height: float = 1.0
     # [x, y, z, roll, pitch, yaw], radians. This is shared with the runtime
@@ -71,25 +67,28 @@ class AnchorResult:
     n_points: int
 
 
-def detector_params_for_map(
-    map_params: Optional[DetectorParams] = None,
-) -> DetectorParams:
-    """Return a complete map policy for direct library callers.
+def detector_params_for_map(base: Optional[DetectorParams] = None) -> DetectorParams:
+    """Detection thresholds adjusted for a merged map rather than one scan.
 
-    A supplied object is treated as an already-resolved map policy and copied
-    without importing any runtime values. The no-argument defaults disable the
-    two gates that require a sensor origin or a single scan. Configuration
-    users should prefer ``Config.map_detector`` so map height, clustering, and
-    geometry tuning is explicit in YAML.
+    Two gates are meaningless here and are turned off rather than retuned:
+
+    - **Range.** Distances in a map are measured from an arbitrary origin, not
+      from a sensor, so a range window rejects the board for no reason.
+    - **Density.** The expected return count assumes one scan from one
+      viewpoint. A map merges many, so the count is unbounded from above and
+      the gate would reject every real board.
+
+    Everything geometric — planarity, verticality, extent, mounting height —
+    still applies, and those are the gates that separate the board from the exit
+    signage anyway.
     """
-    if map_params is not None:
-        return replace(map_params)
-    return DetectorParams(
+    params = base or DetectorParams()
+    return replace(
+        params,
         range_min=0.0,
         range_max=float("inf"),
         density_check_enabled=False,
         scan_count=1,
-        height_reference="map_floor",
     )
 
 
@@ -174,20 +173,16 @@ def anchor_cloud(
     one board, and picking between two would define the map frame off the wrong
     object — an error with no later symptom except that everything is shifted.
 
-    ``detector_params`` is the already-resolved map policy. If it is omitted,
-    ``detector_params_for_map`` supplies conservative direct-library defaults;
-    it never reaches into the runtime node's configuration.
-
     ``aabb`` is an optional map-only crop in the levelled, floor-zero
     ``map_debug`` frame. It restricts detector input; floor fitting, viewpoint
     calculation, and the cloud written to the anchored map still use every
-    point.
+    point. When omitted, a ``map_aabb`` attached to ``detector_params`` is used.
 
     ``on_result``, if given, is called with ``(levelled_points, intensity,
     DetectResult, viewpoint)`` right after detection runs and before either
     outcome is decided — including on failure, when the raised ``ValueError``
     would otherwise discard every rejected cluster. This is the hook the CLI's
-    ``--rviz`` debug output uses; this module stays free of the ROS/plotting
+    ``--dump-debug`` output uses; this module stays free of the ROS/plotting
     concerns that would otherwise pull in.
     """
     params = params or AnchorParams()
@@ -214,13 +209,9 @@ def anchor_cloud(
     # and the trajectory may not be either.
     viewpoint = np.median(levelled, axis=0)
 
-    map_params = (
-        detector_params_for_map()
-        if detector_params is None
-        else replace(detector_params)
-    )
+    map_params = detector_params_for_map(detector_params)
     map_params.viewpoint = viewpoint
-
+    aabb = map_params.map_aabb if aabb is None else aabb
     detection_points = levelled
     detection_intensity = intensity
     n_inside_aabb = len(levelled)

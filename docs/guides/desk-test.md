@@ -29,7 +29,7 @@ To test a user-owned configuration:
 
 ```bash
 ros2 launch reflective_pose_ros simulated_scene.launch.xml \
-    config_file:=/home/you/reflective_pose.yaml rviz:=true
+    config_file:=/home/you/detector.yaml rviz:=true
 ```
 
 Add `rviz:=true` to open RViz with `rviz/board_detector.rviz`:

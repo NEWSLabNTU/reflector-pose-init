@@ -23,7 +23,7 @@
   <depend>sensor_msgs</depend>
   <depend>sensor_msgs_py</depend>
   <depend>geometry_msgs</depend>
-  <!-- Optional motion guard: ros.twist_topic accepts either type. -->
+  <!-- Optional motion guard: twist_topic accepts either type. -->
   <depend>nav_msgs</depend>
   <depend>std_msgs</depend>
   <depend>diagnostic_msgs</depend>

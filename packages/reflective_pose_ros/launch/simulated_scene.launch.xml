@@ -13,7 +13,7 @@
   <arg name="blooming" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="config_file"
-       default="$(find-pkg-share reflective_pose_ros)/config/reflective_pose.yaml"/>
+       default="$(find-pkg-share reflective_pose_core)/config/detector.yaml"/>
 
   <node pkg="reflective_pose_ros" exec="board_scene_publisher"
         name="board_scene_publisher" output="screen">
