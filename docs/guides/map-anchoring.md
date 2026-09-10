@@ -73,8 +73,9 @@ room-centre viewpoint, and the exported map still use the full cloud; only
 detection input is cropped. Because floor levelling does not establish a
 canonical XY origin or heading, choose the bounds from a debug view and expect
 to retune them when the SLAM export frame changes. Set an individual coordinate
-to `null` when that side should be unbounded, and use `aabb: null` to disable
-the entire crop.
+to `-.inf` on a lower bound or `.inf` on an upper bound when that side should
+be unbounded. Omit `aabb` (or use `aabb: null`) to disable the entire crop.
+The legacy `aabb: null` spelling remains accepted for backwards compatibility.
 
 ## What it writes
 

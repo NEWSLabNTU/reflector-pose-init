@@ -54,7 +54,7 @@ Set these before tuning any detector gate:
 board:
   pose_in_map: [x, y, z, roll, pitch, yaw]
   width: 0.6
-  height: 0.97
+  height: 0.6
 ```
 
 `width` and `height` describe the reflective face in metres. `pose_in_map` is
@@ -97,8 +97,8 @@ detector:
     height_reference: map_floor
     board_centre_height: 1.0
     aabb:
-      min: [null, null, 0.5]
-      max: [null, null, 1.5]
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.5]
     cluster_tolerance: 0.05
     cluster_min_points: 60
     planarity_max_thickness: 0.08
@@ -106,15 +106,77 @@ detector:
 ```
 
 `aabb` is an inclusive point filter in the leveled, floor-zero `map_debug`
-frame. `null` on an individual coordinate means that side is unbounded. The
-old `detector.map.height_min` and `detector.map.height_max` settings are not
-accepted; use the AABB Z bounds instead. The AABB restricts detector input but
-does not crop floor fitting or the cloud written to the anchored map.
+frame. Use `-.inf` on a lower coordinate and `.inf` on an upper coordinate to
+leave that side unbounded. Omit `aabb` to disable the crop; `aabb: null` is
+still accepted for backwards compatibility. The old `detector.map.height_min` and
+`detector.map.height_max` settings are not accepted; use the AABB Z bounds
+instead. The AABB restricts detector input but does not crop floor fitting or
+the cloud written to the anchored map.
 
 The map's XY origin and heading are inherited from the SLAM export. They are
 not made canonical by floor levelling, so choose finite XY bounds from a debug
 view and expect to retune them when the export changes. `board_centre_height`
 is still a candidate-centre gate; it is not a replacement for the AABB.
+
+### Tune detector gates from evidence
+
+Do not tune all thresholds together. The detector is deliberately staged, so
+use the first stage that loses the board and change only the settings that
+belong to that stage. The [configuration reference](../configuration.md)
+defines the formulas and units; this section is the short field procedure.
+
+| Observation | Inspect first | Typical action | Risk of loosening |
+|---|---|---|---|
+| `n_after_gates` is too small or zero | intensity, range, runtime height frame and bounds | Correct the sensor contract or widen the point band | Diffuse returns and unrelated reflective points enter clustering |
+| Enough points, but `n_clusters` is zero or the board is split | `cluster_tolerance`, `cluster_min_points`, scan motion | Increase tolerance only enough to bridge adjacent rings, or reduce the minimum for a known sparse view | Separate reflectors merge, making geometry and ambiguity worse |
+| `bad_width` or `bad_height` | configured reflective-face dimensions, occlusion, extents in the rejection label | Correct `board.width/height`; then adjust the matching extent factor if the sensor systematically under- or over-observes | Wrong dimensions can produce a plausible pose for the wrong object |
+| `not_planar` | map noise, merged cluster, motion smear, `planarity_max_thickness` | Fix clustering or motion first; raise the thickness limit only for measured sensor noise | Walls, signs, and merged objects can pass as boards |
+| `not_vertical` | board mounting, TF, `verticality_max_dot` | Correct the frame or mounting assumption; widen the tilt limit only if the installation allows it | Horizontal surfaces become candidates |
+| `bad_mount_height` | `height_reference`, floor datum, `board_centre_height` | Fix the frame/derived height; widen `centre_height_tolerance` only for known mounting variation | Reflectors at other heights survive |
+| `too_dense` | `ros.accumulate_scans`, cluster merging, `azimuth_step_rad`, density setting | Make `scan_count` match accumulated scans and fix merging/motion; then review `density_max_ratio` | Large unrelated clusters survive; this is an upper-bound check, not a minimum-return check |
+| `AMBIGUOUS` | all surviving candidate labels, map AABB or visible reflectors | Remove the second physical candidate or constrain the search region | Choosing a winner would risk initializing to the wrong object |
+
+#### Extent example
+
+`extent_tolerance` is a pair of multipliers, not a metre-valued tolerance:
+
+```yaml
+board:
+  width: 0.6
+  height: 0.6
+
+detector:
+  runtime:
+    extent_tolerance: [0.8, 1.5]
+```
+
+This accepts a projected width and height from `0.48 m` through `0.90 m`:
+
+```text
+lower bound = 0.8 * nominal dimension
+upper bound = 1.5 * nominal dimension
+```
+
+The detector measures the min-to-max spread after fitting the cluster plane and
+projecting onto its board-aligned horizontal and vertical axes. A low measured
+extent usually means occlusion, dropout, scan smearing, or a split cluster;
+an oversized extent usually means a merged cluster or incorrect board size.
+Change the lower and upper factors independently and record why the observed
+data requires the change.
+
+#### Runtime and map tuning are separate
+
+The runtime and map blocks intentionally repeat several names, but they do not
+see identical data. Runtime points come from a live sensor and heights are in
+`base_link`; map points come from the floor-levelled `map_debug` frame. Use the
+runtime profile for sensor distance, vehicle height, accumulated-scan density,
+and motion effects. Use the map profile for the AABB, map floor height,
+aggregated-map clustering, and map-specific geometry noise.
+
+After each meaningful change, run the [desk test](desk-test.md), then validate
+with a stationary [rosbag](rosbag-validation.md) or the map's
+`--dry-run --dump-debug` workflow. A successful detector is not enough if more
+than one reflector survives or the observed board centre is unconstrained.
 
 ### 4. ROS wiring and motion protection
 
@@ -122,7 +184,7 @@ Set the cloud topic and frame names to match the live system:
 
 ```yaml
 ros:
-  input_topic: /sensing/lidar/top/pointcloud_raw_ex
+  input_topic: /sensing/lidar/vlp32/velodyne_points
   sensor_frame: velodyne
   base_frame: base_link
   accumulate_scans: 10

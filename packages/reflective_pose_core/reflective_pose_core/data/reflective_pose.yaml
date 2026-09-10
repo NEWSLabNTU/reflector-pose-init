@@ -35,7 +35,7 @@ detector:
     # board height in the anchored map plus the base_link floor offset. This
     # assumes board.pose_in_map[2] uses the canonical floor datum; set an
     # explicit value if a deployment uses another vertical datum.
-    board_centre_height: null
+    board_centre_height: null       # auto-derived; not an unbounded value
     # Below 3 m the board falls into the sparse lower elevation band, where the
     # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
     # third from the rest of the cluster. Measured in simulation, not guessed.
@@ -62,12 +62,13 @@ detector:
     # Optional spatial crop for map anchoring. Bounds are inclusive and are
     # expressed in the levelled, floor-zero map_debug frame. This is applied
     # only to detection; floor fitting, viewpoint calculation, and the output
-    # map still use the full cloud. Use null for an unbounded axis. These Z
-    # bounds replace the old map.height_min/map.height_max settings.
+    # map still use the full cloud. Use -.inf for an unbounded lower axis and
+    # .inf for an unbounded upper axis. These Z bounds replace the old
+    # map.height_min/map.height_max settings.
     aabb:
       min: [-20, -20, 0.5]
       max: [20, 20, 1.1]
-    # To restrict XY as well, replace the nulls with finite map_debug values:
+    # To restrict XY as well, replace the infinities with finite map_debug values:
     #   min: [-5.0, -3.0, 0.0]
     #   max: [ 5.0,  3.0, 2.0]
     # This is map-local tuning, not the runtime base_link height. The fitted

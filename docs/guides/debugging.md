@@ -33,7 +33,7 @@ rviz2 -d "$(ros2 pkg prefix reflective_pose_ros)/share/reflective_pose_ros/rviz/
 Check the input and diagnostics:
 
 ```bash
-ros2 topic hz /sensing/lidar/top/pointcloud_raw_ex
+ros2 topic hz /sensing/lidar/vlp32/velodyne_points
 ros2 topic echo /diagnostics
 ros2 topic list | grep board_detector
 ```
@@ -79,9 +79,42 @@ viewpoint calculation, and the output cloud use the full input map.
 | No pose and `accumulate` | Too few scans or no candidate yet | input topic, `accumulate_scans`, intensity, runtime gates |
 | `no candidate` | Reflective clusters failed a gate | rejection reason, height frame, extents, planarity, board dimensions |
 | `AMBIGUOUS` | Multiple board-shaped clusters survived | signs/reflectors in view, map AABB, XY crop, geometry gates |
-| `no points inside map AABB` | The crop misses the leveled cloud | inspect `map_debug` coordinates and use `null` for an unbounded side |
+| `no points inside map AABB` | The crop misses the leveled cloud | inspect `map_debug` coordinates and use `-.inf`/`.inf` for unbounded lower/upper sides |
 | Floor fit tilted too far | The lowest points do not describe the floor | floor band/percentile, map export, multiple floor levels |
 | Board found but wrong pose | Shared map contract or orientation is wrong | `board.pose_in_map`, board dimensions, anchored map, viewpoint |
+
+## Read rejection labels
+
+Each rejected cluster gets one label at its centroid. The label contains the
+first geometry gate that rejected that cluster and, when available, the
+measured value. Compare that value with the resolved configuration for the
+same runtime or map profile.
+
+| Reason | Label measurement | Meaning | Check first |
+|---|---|---|---|
+| `not_planar` | `thickness X m` | The cluster is thicker than `planarity_max_thickness` after fitting a plane | merged objects, map noise, scan motion, then the thickness limit |
+| `not_vertical` | `|n.up| X` | The fitted board normal is too aligned with gravity; `0` is a vertical board and `1` is horizontal | TF, board mounting, and `verticality_max_dot` |
+| `degenerate_up` | no measurement | The fitted normal leaves no usable gravity-up direction in the board plane | degenerate or nearly horizontal geometry and the preceding verticality setting |
+| `bad_width` | `X m` | Projected width is outside `extent_tolerance * board.width` | reflective-face width, occlusion, cluster splitting/merging |
+| `bad_height` | `X m` | Projected height is outside `extent_tolerance * board.height` | reflective-face height, vertical occlusion, height filtering |
+| `bad_mount_height` | `X m` | The cluster centroid height is outside `board_centre_height ± centre_height_tolerance` | height frame, floor datum, derived centre height |
+| `too_dense` | `ratio X` | The cluster has more points than `density_max_ratio` times the sensor-model expectation | accumulated scan count, motion, merged clusters, density setting |
+
+For example, with a `0.6 m` board and `extent_tolerance: [0.8, 1.5]`, a
+`bad_width 0.41 m` rejection is below the `0.48 m` lower bound. Do not fix
+that by changing planarity or density: inspect occlusion, scan accumulation,
+and the configured board width first.
+
+The labels are per-cluster, not a summary of the entire scan. If there are no
+labels, the failure happened before cluster geometry: inspect the point count
+after intensity/range/height gates, `cluster_min_points`, and the input topic
+or frame. The detector does not report later measurements for a cluster that
+already failed an earlier gate.
+
+For offline map runs, `--dump-debug` also stores the resolved map parameters,
+the measured rejection value, and the accepted lower/upper limits in the NPZ
+debug file. This is useful when the YAML contains separate runtime and map
+profiles; do not compare a map rejection against runtime limits.
 
 ## Tune in a safe order
 

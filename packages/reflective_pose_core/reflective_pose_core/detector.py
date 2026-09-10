@@ -30,31 +30,44 @@ class Status(Enum):
 class Aabb:
     """An axis-aligned box in a named point-cloud frame.
 
-    ``None`` on one side of an axis means that side is unbounded. This lets a
-    map use the same object for a full XY search with only a Z slab, without
-    reintroducing separate map height bounds.
+    ``None`` on one side of an axis means that side is unbounded. Signed
+    infinities are accepted as input aliases (``-inf`` for an unbounded lower
+    bound and ``inf`` for an unbounded upper bound) and normalized to ``None``.
+    This lets a map use the same object for a full XY search with only a Z
+    slab, without reintroducing separate map height bounds.
     """
 
     minimum: Tuple[Optional[float], Optional[float], Optional[float]]
     maximum: Tuple[Optional[float], Optional[float], Optional[float]]
 
     def __post_init__(self):
+        def normalize(value, lower):
+            if value is None:
+                return None
+            value = float(value)
+            if np.isnan(value):
+                raise ValueError("AABB bounds cannot contain NaN")
+            if np.isneginf(value):
+                if lower:
+                    return None
+                raise ValueError("upper AABB bounds cannot be -inf")
+            if np.isposinf(value):
+                if not lower:
+                    return None
+                raise ValueError("lower AABB bounds cannot be inf")
+            return value
+
         try:
             minimum = tuple(
-                None if value is None else float(value) for value in self.minimum
+                normalize(value, lower=True) for value in self.minimum
             )
             maximum = tuple(
-                None if value is None else float(value) for value in self.maximum
+                normalize(value, lower=False) for value in self.maximum
             )
         except TypeError as error:
             raise ValueError("AABB bounds must each contain three values") from error
         if len(minimum) != 3 or len(maximum) != 3:
             raise ValueError("AABB bounds must each contain exactly three values")
-        if any(
-            value is not None and not np.isfinite(value)
-            for value in (*minimum, *maximum)
-        ):
-            raise ValueError("AABB bounds must contain finite values or null")
         for lower, upper in zip(minimum, maximum):
             if lower is not None and upper is not None and lower >= upper:
                 raise ValueError(

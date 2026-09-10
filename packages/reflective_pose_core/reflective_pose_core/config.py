@@ -406,7 +406,7 @@ def _reject_unknown(path: str, section: str, values: Dict[str, Any], target_type
 
 
 def _parse_aabb(path: str, value: Any) -> Optional[Aabb]:
-    """Parse the map-only AABB without allowing partial or infinite bounds."""
+    """Parse the map-only AABB, using signed infinity for unbounded axes."""
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != {"min", "max"}:
@@ -425,7 +425,8 @@ def _parse_aabb(path: str, value: Any) -> Optional[Aabb]:
     except (TypeError, ValueError) as error:
         raise ValueError(
             f"{path}: detector.map.aabb requires [x, y, z] bounds with finite "
-            "values or null for unbounded axes, and min < max on bounded axes"
+            "values, -inf lower bounds, or inf upper bounds for unbounded axes, "
+            f"and min < max on bounded axes ({error})"
         ) from error
 
 

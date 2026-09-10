@@ -81,8 +81,8 @@ detector:
     height_reference: map_floor
     board_centre_height: 1.0
     aabb:
-      min: [null, null, 0.8]
-      max: [null, null, 1.2]
+      min: [-.inf, -.inf, 0.8]
+      max: [.inf, .inf, 1.2]
     cluster_tolerance: 0.05
     cluster_min_points: 60
     planarity_max_thickness: 0.08
@@ -141,7 +141,8 @@ def test_map_aabb_is_loaded_separately_from_runtime_policy(tmp_path):
         ("{min: [0, 0, 0]}", "min.*max"),
         ("{min: [0, 0], max: [1, 1, 1]}", "finite"),
         ("{min: [1, 0, 0], max: [1, 1, 1]}", "min < max"),
-        ("{min: [-.inf, 0, 0], max: [1, 1, 1]}", "finite"),
+        ("{min: [.inf, 0, 0], max: [1, 1, 1]}", "lower AABB bounds"),
+        ("{min: [-1, 0, 0], max: [-.inf, 1, 1]}", "upper AABB bounds"),
     ],
 )
 def test_map_aabb_rejects_invalid_bounds(tmp_path, aabb, message):
@@ -239,4 +240,4 @@ def test_default_config_path_falls_back_to_the_packaged_file(monkeypatch):
 
     assert resolved.endswith("reflective_pose_core/data/reflective_pose.yaml")
     # It is a real file, and it loads: the packaged default must always work.
-    assert load_config().detector.intensity_threshold == 240.0
+    assert load_config().detector.intensity_threshold == 150.0

@@ -91,18 +91,18 @@ are the four kinds of setting already mixed in that file, separated:
 board:                        # shared truth: runtime AND offline anchoring
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]   # x y z roll pitch yaw, radians
   width: 0.6
-  height: 0.97
+  height: 0.6
 
 detector:                     # core
-  intensity_threshold: 240.0
+  intensity_threshold: 150.0
   azimuth_step_rad: 0.0035
   runtime:                     # heights in base_link
     height_reference: base_link
     floor_height_in_frame: -0.265
-    board_centre_height: null  # derive from board pose plus floor offset
+    board_centre_height: null  # auto-derive; not an unbounded value
     range_min: 3.0
     range_max: 18.0
-    cluster_tolerance: 0.05
+    cluster_tolerance: 0.20
     cluster_min_points: 60
     extent_tolerance: [0.8, 1.5]
     planarity_max_thickness: 0.08
@@ -113,9 +113,9 @@ detector:                     # core
     height_reference: map_floor
     board_centre_height: 1.0
     aabb:                      # optional [min, max] crop in map_debug
-      min: [null, null, 0.5]
-      max: [null, null, 1.5]
-    # To restrict XY as well, replace the nulls with finite map_debug values:
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.5]
+    # To restrict XY as well, replace the infinities with finite map_debug values:
     #   min: [-5.0, -3.0, 0.0]
     #   max: [ 5.0,  3.0, 2.0]
     range_min: 0.0
@@ -132,7 +132,7 @@ anchor:                       # core, offline path
   # floor fit and anchoring inputs
 
 ros:                          # reflective_pose_ros
-  input_topic: /sensing/lidar/top/pointcloud_raw_ex
+  input_topic: /sensing/lidar/vlp32/velodyne_points
   sensor_frame: velodyne
   base_frame: base_link
   accumulate_scans: 10
