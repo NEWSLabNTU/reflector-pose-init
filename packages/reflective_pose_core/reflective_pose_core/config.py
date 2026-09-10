@@ -1,22 +1,32 @@
-"""Load the canonical configuration, without importing ROS.
+"""Load the detector file, without importing ROS.
 
-One YAML file, five sections, read by every package in this repository. The
-previous layout was a flat ``/**: ros__parameters`` block that this module
-parsed by hand precisely so it would not have to import ROS -- the shape was
-ROS's, the reader was not. The sections here are the kinds of setting that were
-already mixed in that block, separated by who consumes them.
+One YAML, three sections, read by the two things that run the detector: the
+ROS node and the offline anchoring tool.
 
-Two couplings are enforced here rather than left to each caller, because both
-have already been the subject of a comment warning about drift:
+``board:``      the board itself -- its map pose and its face dimensions
+``detector:``   the gates ``detect_board`` applies
+``covariance:`` the covariance a published guess carries
 
-``board:`` is shared truth. ``DetectorParams`` and ``AnchorParams`` each carry
-their own copy of the board's width, height and centre height, and the runtime
-node and the offline anchoring tool must agree on the pose. They are written
-once under ``board:`` and fanned out from there.
+That is deliberately all. An earlier layout put the ROS wiring, the Autoware
+handoff policy and the floor-fit knobs in the same file, so that one document
+was read by three kinds of consumer and ``board:`` was fanned out to each of
+them. Those sections now live where each consumer already keeps its settings:
+the two nodes take ROS parameters, and ``anchor-map-to-board`` takes flags. A
+file from that layout is rejected by name (see ``MOVED_SECTIONS``) rather than
+partially read, because a section that is silently ignored looks exactly like
+one whose values took effect.
 
-``ros.accumulate_scans`` feeds ``DetectorParams.scan_count``. The expected
-return count scales with the number of stacked scans, so a node accumulating ten
-against a detector assuming one rejects every real board as ten times too dense.
+Two couplings are still enforced here rather than left to each caller:
+
+``board:`` is shared truth. ``DetectorParams`` carries its own copy of the
+board's width, height and centre height, and ``anchor_params`` builds
+``AnchorParams`` from the same numbers plus the pose. They are written once
+under ``board:`` and fanned out from there.
+
+``DetectorParams.scan_count`` follows however many scans the caller stacks. The
+expected return count scales with it, so a node accumulating ten against a
+detector assuming one rejects every real board as ten times too dense. The
+node is the one thing that knows that number, so it passes it to ``load_config``.
 """
 
 from dataclasses import dataclass, field, fields
@@ -30,9 +40,22 @@ from .detector import DetectorParams
 from .geometry import CovarianceParams
 
 CONFIG_ENV_VAR = "REFLECTIVE_POSE_CONFIG"
-CONFIG_BASENAME = "reflective_pose.yaml"
+CONFIG_BASENAME = "detector.yaml"
 
-SECTIONS = ("board", "detector", "anchor", "covariance", "ros", "autoware")
+SECTIONS = ("board", "detector", "covariance")
+
+#: Sections the six-section layout had, and where each one went. Named in the
+#: error so the fix is in the message rather than in a changelog.
+MOVED_SECTIONS = {
+    "ros": "ROS parameters of board_detector_node (board_detector.param.yaml)",
+    "autoware": "ROS parameters of board_pose_initializer (board_pose_initializer.param.yaml)",
+    "anchor": "flags of anchor-map-to-board (--floor-band, --max-floor-tilt-deg, ...)",
+}
+
+#: The floor-fit knobs of ``AnchorParams``: everything that is not the board.
+FLOOR_FIT_KEYS = tuple(
+    f.name for f in fields(AnchorParams) if not f.name.startswith("board_")
+)
 
 
 @dataclass
@@ -48,65 +71,20 @@ class BoardParams:
 
 
 @dataclass
-class RosParams:
-    """Wiring for reflective_pose_ros. No algorithm lives here."""
-
-    input_topic: str = "/sensing/lidar/top/pointcloud_raw_ex"
-    sensor_frame: str = "velodyne"
-    base_frame: str = "base_link"
-    accumulate_scans: int = 10
-
-    # Stacking scans assumes a stationary sensor: nothing deskews them, so a
-    # batch taken while the vehicle rolls is smeared and the board's extents
-    # measure wrong. The all-in-one node got this for free from the Autoware
-    # velocity gate; with detection split from the Autoware handoff, the
-    # detector needs its own source, in a message type that does not drag
-    # Autoware into this package.
-    #
-    # Empty disables the guard, which is right on a bench and wrong on a
-    # vehicle. `nav_msgs/Odometry` and `geometry_msgs/TwistStamped` are both
-    # accepted; the node picks by the topic's advertised type.
-    twist_topic: str = ""
-    max_speed_for_accumulation: float = 0.05
-
-
-@dataclass
-class AutowareParams:
-    """Handoff policy for reflective_pose_autoware."""
-
-    initialize_service: str = "/localization/initialize"
-    max_speed_for_init: float = 0.05
-    max_attempts: int = 5
-    fallback_to_user_defined_pose: bool = False
-
-    # How long to wait for a board pose before the attempt budget is considered
-    # spent. Zero disables it.
-    #
-    # Detection and the service call are two processes now. An attempt is one
-    # pose acted on, so a detector that never detects spends no attempts and the
-    # fallback policy never runs -- the all-in-one node counted those failures
-    # because it owned the detector loop. This bounds that case.
-    pose_wait_timeout: float = 0.0
-
-
-@dataclass
 class Config:
-    """Everything the five packages read, from one file."""
+    """Everything the detector file holds."""
 
     board: BoardParams = field(default_factory=BoardParams)
     detector: DetectorParams = field(default_factory=DetectorParams)
-    anchor: AnchorParams = field(default_factory=AnchorParams)
-    # Its own section rather than a corner of `autoware:`, because the
-    # covariance is a property of the detection and is computed in
-    # reflective_pose_ros -- which must not have to name an Autoware section to
-    # find its own inputs.
+    # Its own section rather than a corner of the detector gates: the
+    # covariance is a property of the detection, computed in
+    # reflective_pose_ros, and it is tuned separately from what counts as a
+    # detection at all.
     covariance: CovarianceParams = field(default_factory=CovarianceParams)
-    ros: RosParams = field(default_factory=RosParams)
-    autoware: AutowareParams = field(default_factory=AutowareParams)
 
 
 def default_config_path() -> str:
-    """Where the canonical file is, in the order a caller should prefer.
+    """Where the default file is, in the order a caller should prefer.
 
     An explicit override first, then the installed package data, then the
     checkout. The checkout fallback is what lets the tests and a `pip install
@@ -137,8 +115,13 @@ def _select(values: Dict[str, Any], target_type) -> Dict[str, Any]:
     return {name: values[name] for name in names if name in values}
 
 
-def load_config(path: Optional[str] = None) -> Config:
-    """Read the canonical YAML into typed parameters.
+def load_config(path: Optional[str] = None, *, scan_count: Optional[int] = None) -> Config:
+    """Read the detector file into typed parameters.
+
+    ``scan_count`` is how many scans the caller stacks before detecting; it
+    sets ``DetectorParams.scan_count``. Left unset, the dataclass default (one
+    scan) applies, which is right for the anchoring tool and wrong for a node
+    that accumulates.
 
     Unknown keys are an error, not a shrug: a misspelled threshold that is
     silently ignored reads at runtime exactly like a threshold that had no
@@ -151,6 +134,14 @@ def load_config(path: Optional[str] = None) -> Config:
     if not isinstance(document, dict):
         raise ValueError(f"{resolved}: expected a mapping at the top level")
 
+    moved = [name for name in document if name in MOVED_SECTIONS]
+    if moved:
+        where = "; ".join(f"'{name}' is now {MOVED_SECTIONS[name]}" for name in moved)
+        raise ValueError(
+            f"{resolved}: section(s) {moved} no longer belong in the detector "
+            f"file: {where}"
+        )
+
     unknown_sections = set(document) - set(SECTIONS)
     if unknown_sections:
         raise ValueError(
@@ -160,43 +151,29 @@ def load_config(path: Optional[str] = None) -> Config:
 
     board_values = dict(document.get("board") or {})
     detector_values = dict(document.get("detector") or {})
-    anchor_values = dict(document.get("anchor") or {})
-    ros_values = dict(document.get("ros") or {})
-    autoware_values = dict(document.get("autoware") or {})
     covariance_values = dict(document.get("covariance") or {})
 
     # Every section, checked against the file's own keys before anything is
     # injected below -- otherwise the keys this function adds would excuse the
     # ones the author misspelled.
     _reject_unknown(resolved, "board", board_values, BoardParams)
-    _reject_unknown(resolved, "ros", ros_values, RosParams)
-    _reject_unknown(resolved, "autoware", autoware_values, AutowareParams)
     _reject_unknown(resolved, "detector", detector_values, DetectorParams)
-    _reject_unknown(resolved, "anchor", anchor_values, AnchorParams)
     _reject_unknown(resolved, "covariance", covariance_values, CovarianceParams)
 
     board = _build_board(resolved, board_values)
-    ros = RosParams(**_select(ros_values, RosParams))
-    autoware = AutowareParams(**_select(autoware_values, AutowareParams))
 
     if "extent_tolerance" in detector_values:
         detector_values["extent_tolerance"] = tuple(detector_values["extent_tolerance"])
 
-    # board: fans out. Both dataclasses carry their own copy of the geometry;
-    # this is the single place that decides what those copies contain.
+    # board: fans out. The detector carries its own copy of the geometry;
+    # this is the single place that decides what that copy contains.
     detector_values.update(
         board_width=board.width,
         board_height=board.height,
         board_centre_height=board.centre_height,
-        # See the module docstring: this must track the node's accumulation.
-        scan_count=ros.accumulate_scans,
     )
-    anchor_values.update(
-        board_width=board.width,
-        board_height=board.height,
-        board_centre_height=board.centre_height,
-        board_pose_in_map=board.pose_in_map,
-    )
+    if scan_count is not None:
+        detector_values["scan_count"] = int(scan_count)
 
     # viewpoint and elevation_table_rad are runtime objects, not config: the
     # anchoring tool supplies a viewpoint, and the beam table comes from the
@@ -207,10 +184,31 @@ def load_config(path: Optional[str] = None) -> Config:
     return Config(
         board=board,
         detector=DetectorParams(**_select(detector_values, DetectorParams)),
-        anchor=AnchorParams(**_select(anchor_values, AnchorParams)),
         covariance=CovarianceParams(**_select(covariance_values, CovarianceParams)),
-        ros=ros,
-        autoware=autoware,
+    )
+
+
+def anchor_params(config: Config, **floor_fit) -> AnchorParams:
+    """``AnchorParams`` for the anchoring tool: the file's board, the caller's floor fit.
+
+    The board block is the same one the detector reads, so the map is anchored
+    to exactly the geometry the runtime will look for. The floor-fit knobs are
+    a property of one run of one tool and arrive as keyword overrides; a
+    keyword that is not one of them is a ``TypeError``, so the board cannot be
+    quietly overridden from the command line.
+    """
+    unknown = set(floor_fit) - set(FLOOR_FIT_KEYS)
+    if unknown:
+        raise TypeError(
+            f"anchor_params(): {sorted(unknown)} are not floor-fit settings; "
+            f"expected any of {list(FLOOR_FIT_KEYS)}"
+        )
+    return AnchorParams(
+        board_width=config.board.width,
+        board_height=config.board.height,
+        board_centre_height=config.board.centre_height,
+        board_pose_in_map=config.board.pose_in_map,
+        **floor_fit,
     )
 
 

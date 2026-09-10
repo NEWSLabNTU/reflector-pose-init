@@ -41,6 +41,8 @@ stamped before the last time the vehicle was seen moving was accumulated across
 that motion, and is dropped rather than initialized from.
 """
 
+from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
 from enum import Enum
 from typing import Optional
 
@@ -53,16 +55,45 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 from rclpy.time import Time
 from tier4_localization_msgs.srv import InitializeLocalization
 
-from reflective_pose_core.config import default_config_path, load_config
-
 #: Where ``reflective_pose_ros``'s ``~/board_pose`` lands when its node is named
 #: ``board_detector`` in the ``/localization`` namespace, which is what this
 #: package's launch file does. The topic is configurable by remapping
-#: (``--ros-args -r`` or ``<remap>``), not by a parameter: this node declares
-#: exactly one parameter, and a topic name is what remapping is for.
+#: (``--ros-args -r`` or ``<remap>``), not by a parameter: a topic name is
+#: what remapping is for.
 DEFAULT_BOARD_POSE_TOPIC = "/localization/board_detector/board_pose"
 
 VELOCITY_TOPIC = "/vehicle/status/velocity_status"
+
+
+@dataclass
+class Policy:
+    """The handoff policy. Declared as ROS parameters, one per field.
+
+    Shipped as ``config/board_pose_initializer.param.yaml``. This node reads no
+    detector file: everything it decides is a property of the vehicle stack,
+    not of the board.
+    """
+
+    initialize_service: str = "/localization/initialize"
+    max_speed_for_init: float = 0.05
+    max_attempts: int = 5
+    # Off by default: a silent fallback to a fixed pose turns a detector
+    # failure into a mislocalization report three weeks later.
+    fallback_to_user_defined_pose: bool = False
+    # How long to wait for a board pose before the attempt budget counts one
+    # as spent. Zero disables it. Detection and the service call are two
+    # processes, so an attempt is one pose acted on: a detector that never
+    # detects spends no attempts and the fallback never runs. This bounds it.
+    pose_wait_timeout: float = 0.0
+
+
+def declare_policy(node: Node) -> Policy:
+    """Declare every ``Policy`` field as a parameter and read it back."""
+    values = {}
+    for item in dataclass_fields(Policy):
+        node.declare_parameter(item.name, item.default)
+        values[item.name] = node.get_parameter(item.name).value
+    return Policy(**values)
 
 
 class State(Enum):
@@ -75,13 +106,10 @@ class State(Enum):
 class BoardPoseInitializer(Node):
     """Gate on speed, spend the attempt budget, seed the pose initializer."""
 
-    def __init__(self):
-        super().__init__("board_pose_initializer")
+    def __init__(self, **node_kwargs):
+        super().__init__("board_pose_initializer", **node_kwargs)
 
-        self.declare_parameter("config_file", "")
-        config_file = self.get_parameter("config_file").value or default_config_path()
-        self.get_logger().info(f"configuration: {config_file}")
-        self._params = load_config(config_file).autoware
+        self._params = declare_policy(self)
 
         self._state = State.WAIT_POSE
         self._attempts = 0
@@ -92,7 +120,7 @@ class BoardPoseInitializer(Node):
         # failures because it owned the detector loop. This restores the bound.
         # Zero disables it, which is the safe default only because the detector
         # reports its own silence on /diagnostics.
-        self._pose_wait_timeout = float(getattr(self._params, "pose_wait_timeout", 0.0))
+        self._pose_wait_timeout = float(self._params.pose_wait_timeout)
         self._wait_timer = None
         if self._pose_wait_timeout > 0.0:
             self._wait_timer = self.create_timer(

@@ -18,19 +18,20 @@ settings. Set them for the site before validating — see
 
 ## Procedure
 
-A bag's topic and frame rarely match the vehicle's, and they are config rather
-than launch arguments — the anchoring tool reads the same file, so neither can be
-moved from a command line while the other stays put. Copy the config and edit
-`ros.input_topic` and `ros.sensor_frame`:
+A bag's topic and frame rarely match the vehicle's. The topic is a remap and
+the frame a ROS parameter, so both are launch arguments; the detector file
+(`config_file`) describes the board and the gates and is the one the anchoring
+tool shares, so it is left alone here:
 
 ```bash
-ros2 pkg prefix reflective_pose_ros   # its share/config/reflective_pose.yaml
-cp .../share/reflective_pose_ros/config/reflective_pose.yaml /tmp/bag.yaml
-$EDITOR /tmp/bag.yaml
-
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/tmp/bag.yaml
+    input_topic:=/the/bags/points \
+    config_file:=/path/to/detector.yaml \
+    params_file:=/path/to/board_detector.param.yaml   # sensor_frame, accumulate_scans
 ```
+
+The shipped `params_file` says `velodyne`; a bag whose `frame_id` differs needs
+a copy with `sensor_frame` changed.
 
 Play the bag in another terminal:
 
@@ -91,6 +92,6 @@ ros2 service list | grep '^/localization/initialize$'
 ```
 
 Requires an anchored map or a surveyed `board.pose_in_map`, exact sensor TF, and
-the board mounted where the map was built. Set `ros.twist_topic` so the detector
+the board mounted where the map was built. Set `twist_topic` so the detector
 discards scans taken while the cart is moving. This launch is standalone: the
 parent vehicle launch must start map loading separately.

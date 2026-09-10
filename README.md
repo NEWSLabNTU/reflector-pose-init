@@ -41,8 +41,9 @@ pip install -e packages/reflective_pose_core -e packages/reflective_pose_cli
 ros2 launch reflective_pose_ros board_detector.launch.xml
 ```
 
-Subscribes to `ros.input_topic` (`sensor_msgs/PointCloud2`, needs `intensity`),
-accumulates `ros.accumulate_scans` of them, detects, and publishes:
+Subscribes to `~/input/pointcloud` (`sensor_msgs/PointCloud2`, needs
+`intensity`; remap it), accumulates `accumulate_scans` of them, detects, and
+publishes:
 
 | Topic | Type |
 |---|---|
@@ -102,16 +103,26 @@ detector carries no Autoware dependency.
 
 ## Configuration
 
-One YAML, six sections, at
-`packages/reflective_pose_core/reflective_pose_core/data/reflective_pose.yaml`.
-Both nodes declare a single `config_file` parameter; the CLI takes `--config`.
+One file per reader. The detector file is what the detector looks for; both
+the node and the anchoring tool read it, so the map and the runtime guess
+cannot drift apart:
+
+```
+packages/reflective_pose_core/reflective_pose_core/data/detector.yaml
+```
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/path/to/reflective_pose.yaml
+    config_file:=/path/to/detector.yaml input_topic:=/my/points
+anchor-map-to-board cloud.ply -o map/ --config /path/to/detector.yaml
 ```
 
-**Set `ros.twist_topic` before running on a vehicle.** Stacking scans assumes a
+Where each node is plugged in — frames, accumulation, the motion guard, the
+Autoware handoff policy — is ordinary ROS parameters, shipped as
+`board_detector.param.yaml` and `board_pose_initializer.param.yaml`. The
+anchoring tool's floor-fit knobs are its own flags.
+
+**Set `twist_topic` before running on a vehicle.** Stacking scans assumes a
 stationary sensor; without a motion source the detector cannot tell and will
 measure a smeared board.
 

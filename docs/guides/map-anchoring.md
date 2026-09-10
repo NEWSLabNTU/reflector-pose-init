@@ -21,11 +21,11 @@ a detector bias cancels instead of appearing as a localization error.
 ```bash
 # inspect; writes nothing
 anchor-map-to-board slam_export.ply -o /path/to/map \
-    --config /path/to/reflective_pose.yaml --dry-run
+    --config /path/to/detector.yaml --dry-run
 
 # write the map artifacts
 anchor-map-to-board slam_export.ply -o /path/to/map \
-    --config /path/to/reflective_pose.yaml
+    --config /path/to/detector.yaml
 ```
 
 ## Options
@@ -35,7 +35,8 @@ anchor-map-to-board slam_export.ply -o /path/to/map \
 | `cloud` | required | input `.ply` or `.pcd`; must carry `intensity` |
 | `-o`, `--output-dir` | required | directory for the generated artifacts |
 | `--name` | `pointcloud_map.pcd` | output cloud filename |
-| `--config` | packaged `reflective_pose.yaml` | board and detector settings |
+| `--config` | packaged `detector.yaml` | board, detector gates, covariance |
+| `--floor-band`, `--floor-percentile`, `--floor-inlier`, `--floor-refits`, `--max-floor-tilt-deg` | `AnchorParams` | the floor fit; see [configuration](../configuration.md) |
 | `--dry-run` | off | report the result, write nothing |
 | `--dump-debug PATH` | off | write an `.npz` for `anchor_debug_viewer` |
 

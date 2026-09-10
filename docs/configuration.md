@@ -1,51 +1,63 @@
 # Configuration
 
-One file, read by every package:
+One file per reader.
+
+| File | Read by | Holds |
+|---|---|---|
+| `detector.yaml` | `board_detector_node` (`config_file`), `anchor-map-to-board` (`--config`) | the board, the detection gates, the guess covariance |
+| `board_detector.param.yaml` | `board_detector_node`, as ROS parameters | frames, accumulation, the motion guard |
+| `board_pose_initializer.param.yaml` | `board_pose_initializer`, as ROS parameters | the Autoware handoff policy |
+| flags of `anchor-map-to-board` | the tool | the floor fit |
+
+The detector file is the one that matters for correctness: the map is anchored
+offline against the same board block the runtime node looks for, so the two
+cannot drift apart through a launch override. The other settings describe
+where each node is plugged in, and arrive the way every other ROS node takes
+such things. The input cloud is neither: `board_detector_node` subscribes to
+`~/input/pointcloud`, and the launch file remaps it.
+
+Packaged defaults:
 
 ```
-packages/reflective_pose_core/reflective_pose_core/data/reflective_pose.yaml
+packages/reflective_pose_core/reflective_pose_core/data/detector.yaml
+packages/reflective_pose_ros/config/board_detector.param.yaml
+packages/reflective_pose_autoware/config/board_pose_initializer.param.yaml
 ```
-
-Both ROS nodes declare exactly one parameter, `config_file`. Empty means the
-packaged default. The CLI takes `--config`.
 
 ```bash
 ros2 launch reflective_pose_ros board_detector.launch.xml \
-    config_file:=/path/to/reflective_pose.yaml
-anchor-map-to-board cloud.pcd -o map/ --config /path/to/reflective_pose.yaml
+    config_file:=/path/to/detector.yaml \
+    params_file:=/path/to/board_detector.param.yaml \
+    input_topic:=/sensing/lidar/top/pointcloud_raw_ex
+anchor-map-to-board cloud.ply -o map/ --config /path/to/detector.yaml
 ```
 
-`reflective_pose_ros` installs a copy to its `share/config/` for launch files to
-reference. A test asserts the two are byte-identical, so edit the canonical file
-and rebuild — never the copy.
+An unknown key in the detector file is an error, not a warning: a misspelled
+threshold otherwise reads exactly like a threshold that had no effect. A file
+carrying a `ros:`, `autoware:` or `anchor:` section is from the earlier
+six-section layout and is refused with a message saying where each moved.
 
-An unknown key is an error, not a warning. A misspelled threshold otherwise
-reads exactly like a threshold that had no effect.
+## detector.yaml
 
-## Sections
+Three sections.
 
-| Section | Read by | Holds |
-|---|---|---|
-| `board` | everything | the board's size and where it is in the map |
-| `detector` | core | detection gates |
-| `anchor` | core | floor fit for offline anchoring |
-| `covariance` | ros | the guess covariance published with the pose |
-| `ros` | ros | topics, frames, accumulation |
-| `autoware` | autoware | handoff policy |
+| Section | Holds |
+|---|---|
+| `board` | the board's size and where it is in the map |
+| `detector` | detection gates |
+| `covariance` | the guess covariance published with the pose |
 
-Two values are derived rather than repeated, because both have caused drift:
+`board.width`, `board.height` and `board.centre_height` are written once and
+fanned out to the detector and, through `anchor_params()`, to the anchoring
+tool. The runtime pose guess and the map it is checked against cannot disagree.
 
-- `board.width`, `board.height` and `board.centre_height` are written once and
-  fanned out to both the detector and the anchoring tool. The runtime pose guess
-  and the map it is checked against cannot disagree.
-- `detector.scan_count` follows `ros.accumulate_scans`. The expected return
-  count scales with the number of stacked scans, so a node accumulating ten
-  against a detector assuming one rejects every real board as ten times too
-  dense.
+`detector.scan_count` is not in the file. The node passes its own
+`accumulate_scans` to the loader, because the expected return count scales with
+the number of stacked scans: a node accumulating ten against a detector
+assuming one rejects every real board as ten times too dense. The anchoring
+tool leaves it at one.
 
-## board
-
-Shared truth. Both the runtime node and the offline anchoring tool read it.
+### board
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -59,7 +71,7 @@ physical mounting height the detector expects, the second is a map coordinate.
 Keep them equal for a floor-level map; differ deliberately only when the map
 frame carries an offset.
 
-## detector
+### detector
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -89,19 +101,7 @@ YAML say so:
 - **`density_max_ratio`** — an upper bound only. Yaw, occlusion and dropout all
   legitimately reduce the return count; nothing legitimately inflates it.
 
-## anchor
-
-Floor fit for the offline tool.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `floor_band` | `0.3` | metres above the lowest points to fit within |
-| `floor_percentile` | `2.0` | percentile taken as "the lowest points" |
-| `floor_inlier` | `0.05` | refit tolerance, metres |
-| `floor_refits` | `3` | refit iterations |
-| `max_floor_tilt_deg` | `10.0` | refuse a cloud tilted more than this |
-
-## covariance
+### covariance
 
 Read by `reflective_pose_ros`, which computes the covariance: it is a property
 of the detection, not of the stack the pose is handed to.
@@ -116,15 +116,18 @@ of the detection, not of the stack the pose is handed to.
 | `safety_factor` | `2.0` |
 | `unconstrained_axis_sigma` | `1.0` |
 
-Loose on purpose. The service is called with `method=AUTO`, so NDT align refines
-the guess; an over-tight covariance makes it search too small a window, while an
-over-loose one costs a few hundred milliseconds.
+Loose on purpose. The pose is handed on as a guess for a scan matcher to refine
+(Autoware's initializer is called with `method=AUTO`); an over-tight covariance
+makes it search too small a window, while an over-loose one costs a few hundred
+milliseconds.
 
-## ros
+## board_detector.param.yaml
+
+Ordinary `ros__parameters`, under `/**`. A test asserts the shipped file names
+exactly the parameters the node declares, with the node's own defaults.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `input_topic` | `/sensing/lidar/top/pointcloud_raw_ex` | `sensor_msgs/PointCloud2` with `intensity` |
 | `sensor_frame` | `velodyne` | must match the cloud's `header.frame_id` |
 | `base_frame` | `base_link` | static TF to `sensor_frame` must exist |
 | `accumulate_scans` | `10` | scans stacked per detection attempt |
@@ -137,14 +140,16 @@ board's extents measure wrong. Empty is correct on a bench and wrong on a
 vehicle; the node logs a warning when it is empty. `nav_msgs/Odometry` and
 `geometry_msgs/TwistStamped` are both accepted.
 
-## autoware
+## board_pose_initializer.param.yaml
+
+Same shape, same test.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `initialize_service` | `/localization/initialize` | the service called on success |
 | `max_speed_for_init` | `0.05` | m/s above which no pose is acted on |
 | `max_attempts` | `5` | failed attempts before the fallback policy runs |
-| `fallback_to_user_defined_pose` | `false` | send `board.pose_in_map` when attempts run out |
+| `fallback_to_user_defined_pose` | `false` | send an empty request when attempts run out, so Autoware uses its own user-defined pose |
 | `pose_wait_timeout` | `0.0` | seconds to wait for a pose before spending an attempt; `0` disables |
 
 Keep `fallback_to_user_defined_pose` false unless there is an explicit, reviewed
@@ -154,6 +159,20 @@ a mislocalization report three weeks later.
 `pose_wait_timeout` exists because detection and the service call are separate
 processes: an attempt is one *pose acted on*, so a detector that never detects
 spends no attempts and the fallback never runs.
+
+## anchor-map-to-board flags
+
+The floor fit is a property of one run of one tool, so it is flags, with
+`AnchorParams` as the defaults. There is deliberately no flag for the board or
+the gates: those come from `--config`, the same file the vehicle loads.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--floor-band` | `0.3` | metres above the lowest points to fit within |
+| `--floor-percentile` | `2.0` | percentile taken as "the lowest points" |
+| `--floor-inlier` | `0.05` | refit tolerance, metres |
+| `--floor-refits` | `3` | refit iterations |
+| `--max-floor-tilt-deg` | `10.0` | refuse a cloud tilted more than this |
 
 ## Changing the site
 

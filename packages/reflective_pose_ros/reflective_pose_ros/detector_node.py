@@ -22,10 +22,17 @@ message this package cannot depend on, so the guard moved out with the policy: a
 consumer that cares must gate on its own speed source before acting on a pose
 published here.
 
-Configuration is one file, not thirty parameters -- see the ``config_file``
-parameter below.
+Two kinds of setting, taken two ways. What the detector *looks for* -- the
+board, the gates, the covariance -- is the detector file, one parameter
+(``config_file``), because the offline anchoring tool reads the same file and
+the two must not be able to drift apart through a launch override. Where the
+node is *plugged in* -- frames, accumulation, the motion guard -- is ordinary
+ROS parameters (``NodeParams``), shipped as ``config/board_detector.param.yaml``.
+The input cloud is not a parameter at all: it is ``~/input/pointcloud``, and a
+launch file remaps it.
 """
 
+from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from enum import Enum
@@ -57,6 +64,35 @@ from reflective_pose_core.geometry import (
 from .debug_viz import board_pose_stamped, detection_points_cloud, rejection_marker_array
 
 
+@dataclass
+class NodeParams:
+    """Wiring. Declared as ROS parameters, one per field, defaults as written."""
+
+    sensor_frame: str = "velodyne"
+    base_frame: str = "base_link"
+    # Feeds DetectorParams.scan_count. The expected return count scales with
+    # it, so a node accumulating 10 scans against a detector assuming 1 rejects
+    # every real board as ten times too dense. Set here once; load_config
+    # derives the rest.
+    accumulate_scans: int = 10
+    # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
+    # batch taken while the vehicle rolls is smeared and the board's extents
+    # measure wrong. Empty disables the guard: right on a bench, wrong on a
+    # vehicle. nav_msgs/Odometry and geometry_msgs/TwistStamped are both
+    # accepted; the node picks by the topic's advertised type.
+    twist_topic: str = ""
+    max_speed_for_accumulation: float = 0.05
+
+
+def declare_node_params(node: Node) -> NodeParams:
+    """Declare every ``NodeParams`` field as a parameter and read it back."""
+    values = {}
+    for item in dataclass_fields(NodeParams):
+        node.declare_parameter(item.name, item.default)
+        values[item.name] = node.get_parameter(item.name).value
+    return NodeParams(**values)
+
+
 class State(Enum):
     WAIT_TF = "wait_tf"
     ACCUMULATE = "accumulate"
@@ -83,27 +119,28 @@ def covariance_params_from_config(config) -> CovarianceParams:
 class BoardDetectorNode(Node):
     """Detect the board, compose the vehicle pose, publish it."""
 
-    def __init__(self):
-        super().__init__("board_detector")
+    def __init__(self, **node_kwargs):
+        super().__init__("board_detector", **node_kwargs)
 
-        # The only parameter. Empty means "wherever core says the canonical
-        # file lives": $REFLECTIVE_POSE_CONFIG, then the installed package
-        # data, then the checkout.
+        # The detector file. Empty means "wherever core says the default
+        # lives": $REFLECTIVE_POSE_CONFIG, then the installed package data,
+        # then the checkout.
         self.declare_parameter("config_file", "")
         path = self.get_parameter("config_file").value or None
+        self._params = declare_node_params(self)
 
-        self._config = load_config(path)
+        self._config = load_config(path, scan_count=self._params.accumulate_scans)
         self._detector_params = self._config.detector
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
-        self._accumulate_scans = int(self._config.ros.accumulate_scans)
+        self._accumulate_scans = int(self._params.accumulate_scans)
 
         # Stacking scans assumes a stationary sensor: nothing deskews them, so a
         # batch taken while the vehicle rolls is smeared and the board's extents
         # measure wrong. The all-in-one node got this from the Autoware velocity
         # gate; keeping it here, on a std message type, is what lets the gate
         # survive the split without the detector learning about Autoware.
-        self._max_speed = float(self._config.ros.max_speed_for_accumulation)
+        self._max_speed = float(self._params.max_speed_for_accumulation)
         self._speed = 0.0
         self._twist_sub = None
 
@@ -117,15 +154,17 @@ class BoardDetectorNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        self._subscribe_twist(self._config.ros.twist_topic)
+        self._subscribe_twist(self._params.twist_topic)
 
         sensor_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=5,
         )
+        # A fixed name under the node, remapped by whoever launches it. A
+        # parameter would be a second way to say the same thing.
         self._cloud_sub = self.create_subscription(
-            PointCloud2, self._config.ros.input_topic, self._on_cloud, sensor_qos
+            PointCloud2, "~/input/pointcloud", self._on_cloud, sensor_qos
         )
 
         latched = QoSProfile(
@@ -145,9 +184,10 @@ class BoardDetectorNode(Node):
 
         self.create_timer(1.0, self._publish_diagnostics)
         self.get_logger().info(
-            f"board_detector reading {self._config.ros.input_topic}, "
-            f"waiting for {self._config.ros.base_frame} <- "
-            f"{self._config.ros.sensor_frame}"
+            f"board_detector reading {self._cloud_sub.topic_name}, "
+            f"waiting for {self._params.base_frame} <- {self._params.sensor_frame}; "
+            f"board {self._config.board.width:.2f} x {self._config.board.height:.2f} m "
+            f"at {list(self._config.board.pose_in_map)}"
         )
 
     def _board_transform(self) -> np.ndarray:
@@ -165,7 +205,7 @@ class BoardDetectorNode(Node):
         """
         if not topic:
             self.get_logger().warn(
-                "ros.twist_topic is empty: scans will be accumulated regardless "
+                "twist_topic is empty: scans will be accumulated regardless "
                 "of vehicle motion. Correct on a bench; on a vehicle this "
                 "silently smears the board's extents."
             )
@@ -230,8 +270,8 @@ class BoardDetectorNode(Node):
         self._attempt_detection(points, intensity, msg.header.frame_id)
 
     def _lookup_transform(self) -> Optional[np.ndarray]:
-        base = self._config.ros.base_frame
-        sensor = self._config.ros.sensor_frame
+        base = self._params.base_frame
+        sensor = self._params.sensor_frame
         try:
             stamped = self._tf_buffer.lookup_transform(base, sensor, rclpy.time.Time())
         except Exception as error:  # tf2 raises several unrelated types

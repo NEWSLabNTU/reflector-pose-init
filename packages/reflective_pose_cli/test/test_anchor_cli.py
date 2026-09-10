@@ -414,3 +414,39 @@ def test_no_dump_flag_writes_no_file(tmp_path):
         "--dry-run",
     ]) == 0
     assert list(tmp_path.glob("*.npz")) == []
+
+
+def rotation_y(angle):
+    cos, sin = np.cos(angle), np.sin(angle)
+    return np.array([[cos, 0.0, sin], [0.0, 1.0, 0.0], [-sin, 0.0, cos]])
+
+
+def test_floor_fit_flags_reach_the_anchoring(tmp_path, capsys):
+    """The floor-fit knobs are the tool's own flags, not part of the config.
+
+    Observed through the one knob with a visible effect: a cloud tilted by
+    1.5 degrees is levelled under the default limit and refused under a
+    tighter one. Parsing a flag that then goes nowhere would pass a parser
+    test and fail this.
+    """
+    tilted = make_transform(rotation_y(np.radians(1.5)), [0.0, 0.0, 0.0])
+    source = tmp_path / "tilted.ply"
+    write_glim_style_ply(source, build_map_cloud(source_pose=tilted))
+    config = tmp_path / "detector.yaml"
+    write_config(config)
+    common = [str(source), "-o", str(tmp_path / "out"), "--config", str(config), "--dry-run"]
+
+    assert main(common) == 0
+    assert main(common + ["--max-floor-tilt-deg", "1.0"]) == 1
+    assert "not gravity-aligned" in capsys.readouterr().err
+
+
+def test_config_from_the_six_section_layout_is_refused(tmp_path, capsys):
+    """An `anchor:` section in the config is the old layout; say where it went."""
+    source = tmp_path / "map.ply"
+    write_glim_style_ply(source, build_map_cloud())
+    config = tmp_path / "detector.yaml"
+    config.write_text("anchor:\n  floor_band: 0.3\n")
+
+    assert main([str(source), "-o", str(tmp_path / "out"), "--config", str(config)]) == 2
+    assert "anchor-map-to-board" in capsys.readouterr().err

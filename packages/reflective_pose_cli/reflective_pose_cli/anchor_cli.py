@@ -142,7 +142,8 @@ from reflective_pose_core.anchor import (
     detector_params_for_map,
     transform_yaml,
 )
-from reflective_pose_core.config import default_config_path, load_config
+from reflective_pose_core.anchor import AnchorParams
+from reflective_pose_core.config import anchor_params, default_config_path, load_config
 from reflective_pose_core.detector import Status
 from reflective_pose_core.pointcloud_io import read_cloud, write_pcd
 
@@ -173,7 +174,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=default_config_path(),
-        help="shared reflective_pose.yaml (default: package config)",
+        help=(
+            "the detector file (board, detector gates, covariance); the same "
+            "file the runtime node loads (default: package config)"
+        ),
+    )
+    # The floor fit is a property of one run of one tool, so its knobs are
+    # flags rather than config. The board and the gates stay in the file on
+    # purpose: there is no flag that could move the board.
+    floor = parser.add_argument_group("floor fit")
+    defaults = AnchorParams()
+    floor.add_argument(
+        "--floor-band", type=float, default=defaults.floor_band, metavar="M",
+        help="metres above the lowest points to fit the floor within",
+    )
+    floor.add_argument(
+        "--floor-percentile", type=float, default=defaults.floor_percentile,
+        metavar="PCT", help="percentile of z taken as 'the lowest points'",
+    )
+    floor.add_argument(
+        "--floor-inlier", type=float, default=defaults.floor_inlier, metavar="M",
+        help="refit tolerance, metres",
+    )
+    floor.add_argument(
+        "--floor-refits", type=int, default=defaults.floor_refits, metavar="N",
+        help="how many times the plane is refitted on its inliers",
+    )
+    floor.add_argument(
+        "--max-floor-tilt-deg", type=float, default=defaults.max_floor_tilt_deg,
+        metavar="DEG",
+        help="refuse a cloud whose fitted floor tilts more than this from level",
     )
     parser.add_argument(
         "--dry-run",
@@ -471,7 +501,14 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as error:
         print(f"error: cannot load config {args.config}: {error}", file=sys.stderr)
         return 2
-    params = config.anchor
+    params = anchor_params(
+        config,
+        floor_band=args.floor_band,
+        floor_percentile=args.floor_percentile,
+        floor_inlier=args.floor_inlier,
+        floor_refits=args.floor_refits,
+        max_floor_tilt_deg=args.max_floor_tilt_deg,
+    )
     detector_params = config.detector
 
     cloud = read_cloud(args.cloud)

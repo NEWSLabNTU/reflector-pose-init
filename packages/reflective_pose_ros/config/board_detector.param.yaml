@@ -1,0 +1,23 @@
+# Wiring for board_detector_node: where it is plugged in, not what it looks for.
+# What it looks for is the detector file, given as the `config_file` parameter;
+# the input cloud is the ~/input/pointcloud subscription, remapped in launch.
+#
+# Every key here is a field of NodeParams in detector_node.py, and the values
+# are the node's own defaults; a test holds the two together.
+/**:
+  ros__parameters:
+    sensor_frame: velodyne
+    base_frame: base_link
+
+    # Feeds the detector's scan_count. The expected return count scales with
+    # it, so a node accumulating 10 scans against a detector assuming 1
+    # rejects every real board as ten times too dense. Set once, here.
+    accumulate_scans: 10
+
+    # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
+    # batch taken while the vehicle rolls is smeared and the board's extents
+    # measure wrong. Empty disables the guard: right on a bench, wrong on a
+    # vehicle. nav_msgs/Odometry and geometry_msgs/TwistStamped are both
+    # accepted; the node picks by the topic's advertised type.
+    twist_topic: ""
+    max_speed_for_accumulation: 0.05
