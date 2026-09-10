@@ -64,7 +64,7 @@ def test_shipped_param_file_declares_exactly_the_node_parameters():
 
 
 def test_client_speaks_the_service_type_autoware_serves():
-    """Autoware 2025.02 serves /localization/initialize as
+    """Autoware 1.5.0 (the apt distribution) serves /localization/initialize as
     autoware_localization_msgs/srv/InitializeLocalization (see
     autoware/component_interface_specs/localization.hpp). A client built on
     the older tier4_localization_msgs type has an identical definition but a
