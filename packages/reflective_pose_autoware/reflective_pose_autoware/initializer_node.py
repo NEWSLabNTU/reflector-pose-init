@@ -11,7 +11,7 @@ than about the board:
 - how many times do we try (``max_attempts``),
 - and what happens when we run out (``fallback_to_user_defined_pose``).
 
-Then it calls ``tier4_localization_msgs/InitializeLocalization``.
+Then it calls ``autoware_localization_msgs/InitializeLocalization``.
 
 Everything Autoware-specific in the repository is in this file and in this
 package's ``package.xml``. See docs/design/reflective_pose_detector.md.
@@ -53,7 +53,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
-from tier4_localization_msgs.srv import InitializeLocalization
+from autoware_localization_msgs.srv import InitializeLocalization
 
 #: Where ``reflective_pose_ros``'s ``~/board_pose`` lands when its node is named
 #: ``board_detector`` in the ``/localization`` namespace, which is what this

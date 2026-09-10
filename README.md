@@ -84,7 +84,7 @@ Writes `pointcloud_map.pcd`, `board_anchor.yaml`, `board_polygon.osm` and
 `reflective_pose_ros` publishes a pose and stops there. `reflective_pose_autoware`
 is the part that acts on it: it gates on `autoware_vehicle_msgs/VelocityReport`,
 spends an attempt budget, applies the fallback policy, and calls
-`tier4_localization_msgs/InitializeLocalization` with `method=AUTO` so NDT align
+`autoware_localization_msgs/InitializeLocalization` with `method=AUTO` so NDT align
 refines the guess.
 
 Both nodes together:

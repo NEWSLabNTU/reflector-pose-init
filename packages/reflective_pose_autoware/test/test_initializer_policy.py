@@ -13,7 +13,7 @@ import pytest
 
 rclpy = pytest.importorskip("rclpy")
 pytest.importorskip("autoware_vehicle_msgs")
-pytest.importorskip("tier4_localization_msgs")
+pytest.importorskip("autoware_localization_msgs")
 
 from autoware_vehicle_msgs.msg import VelocityReport  # noqa: E402
 from geometry_msgs.msg import PoseWithCovarianceStamped  # noqa: E402

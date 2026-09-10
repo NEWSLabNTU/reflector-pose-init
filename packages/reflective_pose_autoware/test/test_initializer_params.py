@@ -15,7 +15,7 @@ import yaml
 
 rclpy = pytest.importorskip("rclpy")
 pytest.importorskip("autoware_vehicle_msgs")
-pytest.importorskip("tier4_localization_msgs")
+pytest.importorskip("autoware_localization_msgs")
 
 from rclpy.parameter import Parameter  # noqa: E402
 
@@ -59,5 +59,22 @@ def test_shipped_param_file_declares_exactly_the_node_parameters():
     try:
         for name, value in shipped.items():
             assert node.get_parameter(name).value == value, name
+    finally:
+        node.destroy_node()
+
+
+def test_client_speaks_the_service_type_autoware_serves():
+    """Autoware 2025.02 serves /localization/initialize as
+    autoware_localization_msgs/srv/InitializeLocalization (see
+    autoware/component_interface_specs/localization.hpp). A client built on
+    the older tier4_localization_msgs type has an identical definition but a
+    different type name, and rclpy's service_is_ready() then never becomes
+    true: the node waited five seconds and reported the service unavailable
+    while `ros2 service list` showed it, on the D1a replay of 2026-09-10.
+    """
+    pytest.importorskip("autoware_localization_msgs")
+    node = make_node()
+    try:
+        assert node._client.srv_type.__module__.startswith("autoware_localization_msgs.")
     finally:
         node.destroy_node()

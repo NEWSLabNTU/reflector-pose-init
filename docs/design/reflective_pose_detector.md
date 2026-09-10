@@ -13,7 +13,7 @@ The package does four jobs that have four different audiences:
 - an **Autoware handoff**, which is one service call and one gating rule
 
 Today all four live in one `ament_python` package whose `package.xml` depends on
-`tier4_localization_msgs` and `autoware_vehicle_msgs`. That means a person who
+`autoware_localization_msgs` and `autoware_vehicle_msgs`. That means a person who
 wants to detect a retroreflective board in a point cloud must install Autoware,
 and a stack that is not Autoware cannot use the detector at all. Neither is a
 consequence of the algorithm; both are consequences of the packaging.
@@ -39,7 +39,7 @@ packages/
 | `sim` | `simulation/{vlp32_sim,scenes}` | 529 | numpy, core |
 | `cli` | `anchor_cli` | 263 | core |
 | `ros` | `node` (most), `debug_viz`, `scene_publisher` | ~750 | rclpy, core, sim |
-| `autoware` | new, extracted from `node` | ~150 | ros, `tier4_localization_msgs`, `autoware_vehicle_msgs` |
+| `autoware` | new, extracted from `node` | ~150 | ros, `autoware_localization_msgs`, `autoware_vehicle_msgs` |
 
 `core` and `cli` and `sim` carry a `pyproject.toml` **and** a `package.xml` with
 `ament_python`, so `colcon build` sees them and `pip install` also works. That is
@@ -69,7 +69,7 @@ It knows nothing about what anyone does with that pose.
 **`reflective_pose_autoware`** — decides and acts. Subscribes to `~/board_pose`,
 gates on `autoware_vehicle_msgs/VelocityReport` (`max_speed_for_init`), applies
 `max_attempts` and the `fallback_to_user_defined_pose` policy, and calls
-`tier4_localization_msgs/InitializeLocalization`.
+`autoware_localization_msgs/InitializeLocalization`.
 
 Putting the *policy* — when is it safe to initialize, how many times do we try,
 what happens when we fail — in the Autoware package rather than the generic one
