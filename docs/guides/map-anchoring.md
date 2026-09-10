@@ -8,6 +8,13 @@ Detection reuses the same detector the node runs, so the board pose defining the
 map and the board pose the vehicle computes at startup come from identical code:
 a detector bias cancels instead of appearing as a localization error.
 
+## Before you start
+
+Build and source the workspace as described in
+[getting started](getting-started.md), then prepare a user-owned configuration
+with [configuring the detector](configuring.md). The map and runtime commands
+must use the same `board:` dimensions and `board.pose_in_map` values.
+
 ## Procedure
 
 1. Build a SLAM map and export its cloud as `.ply` or `.pcd` **with the

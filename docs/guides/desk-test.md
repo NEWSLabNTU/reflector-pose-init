@@ -4,6 +4,9 @@ No hardware, no bag, no localization stack. `reflective_pose_sim` renders
 VLP-32C scans of a synthetic room and `board_scene_publisher` puts them on the
 wire, along with the static `base_link -> velodyne` transform the node needs.
 
+This is the first functional check after [building and sourcing the workspace](getting-started.md).
+It uses the packaged configuration unless `config_file` is supplied.
+
 ```bash
 ros2 launch reflective_pose_ros simulated_scene.launch.xml
 ros2 launch reflective_pose_ros simulated_scene.launch.xml scene:=two_boards
@@ -12,6 +15,22 @@ ros2 launch reflective_pose_ros simulated_scene.launch.xml scene:=distractors
 
 Expected outcomes, in order: a detection, an ambiguity abort, and a clean
 no-candidate.
+
+With the default node name, inspect the result and diagnostics from another
+terminal:
+
+```bash
+ros2 topic echo /board_detector/board_pose \
+    --qos-durability transient_local
+ros2 topic echo /diagnostics
+```
+
+To test a user-owned configuration:
+
+```bash
+ros2 launch reflective_pose_ros simulated_scene.launch.xml \
+    config_file:=/home/you/reflective_pose.yaml rviz:=true
+```
 
 Add `rviz:=true` to open RViz with `rviz/board_detector.rviz`:
 

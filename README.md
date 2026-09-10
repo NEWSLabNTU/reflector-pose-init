@@ -7,6 +7,10 @@ source where GNSS is unavailable — indoors, under cover.
 One-shot, not a localizer: it runs while the vehicle is stationary and can see
 its board, produces one pose, and stops.
 
+New users: start with the [guide index](docs/guides/README.md), then follow the
+setup, configuration, runtime, map, and validation guide that matches your
+workflow.
+
 ## Packages
 
 | Package | Role | ROS | Autoware |
@@ -130,8 +134,18 @@ The three ROS-free packages need only `PYTHONPATH`; the two ROS ones need
 
 ## Documentation
 
+- [Guides](docs/guides/README.md) — task-oriented recipes and recommended
+  reading order
+- [Getting started](docs/guides/getting-started.md) — build and run the first
+  synthetic detection
+- [Configuring the detector](docs/guides/configuring.md) — create and select a
+  deployment YAML
+- [Live detection](docs/guides/live-detection.md) — run against LiDAR and RViz
+- [Autoware initialization](docs/guides/autoware-initialization.md) — hand the
+  pose to `/localization/initialize`
+- [Debugging](docs/guides/debugging.md) — inspect live and offline failures
+- [Map anchoring](docs/guides/map-anchoring.md) — produce an anchored map
+- [Rosbag validation](docs/guides/rosbag-validation.md) — validate a real scan
 - [Design](docs/design/reflective_pose_detector.md) — the package split and why
 - [Configuration](docs/configuration.md)
-- [Desk test](docs/guides/desk-test.md) — no hardware
-- [Rosbag validation](docs/guides/rosbag-validation.md) — before a vehicle
-- [Map anchoring](docs/guides/map-anchoring.md)
+- [Desk test](docs/guides/desk-test.md) — no hardware, synthetic scenes
