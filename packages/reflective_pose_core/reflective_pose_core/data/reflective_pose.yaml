@@ -65,8 +65,8 @@ detector:
     # map still use the full cloud. Use null for an unbounded axis. These Z
     # bounds replace the old map.height_min/map.height_max settings.
     aabb:
-      min: [null, null, 0.5]
-      max: [null, null, 1.5]
+      min: [-20, -20, 0.5]
+      max: [20, 20, 1.5]
     # To restrict XY as well, replace the nulls with finite map_debug values:
     #   min: [-5.0, -3.0, 0.0]
     #   max: [ 5.0,  3.0, 2.0]
