@@ -68,11 +68,27 @@ detector:
   # third from the rest of the cluster. Measured in simulation, not guessed.
   range_min: 3.0
   range_max: 18.0
+  # Point heights above base_link kept before clustering. The board spans
+  # 1.0 to 1.6 m; the old 1.5 clipped its top 0.1 m in every detection on
+  # the replay bag (cluster z topped out at 1.499, height read 0.50). 1.65
+  # rather than something looser because a second retroreflective band sits
+  # directly above the board, 1.7 to 1.9 m with a 0.1 m gap, and
+  # cluster_tolerance bridges 0.1 m: with height_max 1.7 the band merged
+  # into the board in 2 of 9 stationary batches and lifted the centre 6 to
+  # 9 cm. Measured on vlp32_1, 2026-09-10.
   height_min: 0.5
-  height_max: 1.5
+  height_max: 1.65
 
-  # Governed by across-ring spacing, not within-ring spacing.
-  cluster_tolerance: 0.05
+  # Governed by across-ring spacing, not within-ring spacing. The board
+  # centre is 0.66 m below the cart's sensor, so at 5 m it sits at -7.5 deg
+  # elevation where the VLP-32C's rings are 1.1 to 1.6 deg apart, 0.1 to
+  # 0.14 m; below 4 m it reaches the 2.5 to 4.3 deg gaps. Measured on
+  # vlp32_1 (235 batches of 10 stacked scans): at the old 0.05 the board
+  # split into ring stripes and nothing was detected in the whole bag; at
+  # 0.10 the stationary 12 m batches all detected but the 3 m pass lost a
+  # ring (bad_height 0.43); at 0.15 both detect. The cost of 0.15 is the
+  # band above the board, handled by height_max.
+  cluster_tolerance: 0.15
   cluster_min_points: 60
 
   extent_tolerance: [0.8, 1.5]      # fraction of nominal
