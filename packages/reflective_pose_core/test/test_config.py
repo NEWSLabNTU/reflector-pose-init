@@ -18,6 +18,7 @@ import pytest
 
 from reflective_pose_core.config import (
     CONFIG_ENV_VAR,
+    BoardParams,
     anchor_params,
     default_config_path,
     load_config,
@@ -150,4 +151,31 @@ def test_default_config_path_falls_back_to_the_packaged_file(monkeypatch):
 
     assert resolved.endswith("reflective_pose_core/data/detector.yaml")
     # It is a real file, and it loads: the packaged default must always work.
-    assert load_config().detector.intensity_threshold == 240.0
+    assert load_config().detector.intensity_threshold == 100.0
+
+
+def test_packaged_defaults_are_the_decided_values(monkeypatch):
+    """The 2026-09-10 decisions: 0.6 x 0.6 m board, centre 1.3 m, threshold 100.
+
+    100 is the bottom of the VLP-32C's datasheet retroreflector band -- a
+    sensor contract that is reachable, where the previous 240 was not: no
+    scan in the replay bag cleared cluster_min_points at 240.
+    """
+    monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+
+    config = load_config()
+
+    assert config.board.width == 0.6
+    assert config.board.height == 0.6
+    assert config.board.centre_height == 1.3
+    assert config.board.pose_in_map == (0.0, 0.0, 1.3, 0.0, 0.0, 0.0)
+    assert config.detector.intensity_threshold == 100.0
+
+
+def test_board_dataclass_defaults_agree_with_the_packaged_file(monkeypatch):
+    """A file that omits ``board:`` must describe the same board as the packaged one."""
+    monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+
+    packaged = load_config().board
+
+    assert BoardParams() == packaged

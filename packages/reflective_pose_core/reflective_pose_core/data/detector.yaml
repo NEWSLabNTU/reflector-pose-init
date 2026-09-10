@@ -26,14 +26,43 @@ board:
   # [x, y, z, roll, pitch, yaw]. Rotation is intrinsic Rz(yaw) @ Ry(pitch) @
   # Rx(roll); angles are radians. Shared by runtime init and offline anchoring.
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
+  # Decided 2026-09-10: the board is 0.6 x 0.6 m with its centre 1.3 m above
+  # the floor. The earlier 0.97 m height was a guess from a map cluster whose
+  # vertical extent happened to be 0.97 m, which the delivered anchor showed
+  # was the board plus a second reflective band above it.
   width: 0.6
-  height: 0.97
-  centre_height: 1.0
+  height: 0.6
+  centre_height: 1.3
 
 detector:
   # VLP-32C reports calibrated reflectivity: 0-100 diffuse, 101-255 reserved
-  # for retroreflectors. This threshold is a sensor contract, not a tuning.
-  intensity_threshold: 240.0
+  # for retroreflectors. 100 is the bottom edge of that band, so this is a
+  # sensor contract rather than a tuning -- and, unlike the 240 it replaces
+  # (decided 2026-09-10), one the board actually reaches. Measured over the
+  # replay bag vlp32_1 (2026-08-20 basement survey), every twelfth scan,
+  # cluster_min_points being 60:
+  #
+  #   threshold | points per scan (median / p90 / max) | scans with >= 60 points
+  #   > 240     |    0 /   2 /   5                     |   0 of 197
+  #   > 200     |   30 /  84 / 123                     |  43 of 197
+  #   > 150     |  166 / 317 / 654                     | 188 of 197
+  #   > 100     |  361 / 559 / 996                     | 197 of 197
+  #   >= 100   |  401 / 579 / 1036                    | 197 of 197
+  #
+  # The gate is >=, so 100 admits the ~40 returns per scan that read
+  # exactly 100, the top of the diffuse band; they are scattered, not a
+  # cluster, and the geometry sorts them like the rest. (>150 read 317 at
+  # p90 in the phase doc and 316 here: same scans, rounding.)
+  #
+  # No scan cleared cluster_min_points at 240: the detector could not produce
+  # a candidate anywhere in that drive, with nothing wrong in the geometry, the
+  # TF or the board. The cost of 100 is the other direction: everything
+  # retroreflective in the basement now passes this gate -- tape, signs,
+  # vests, a reflective band above the board itself -- and the clustering and
+  # shape gates below are what sort it, with the confidence gate and a
+  # non-terminal AMBIGUOUS (phase 7, A1 and A2). Do not raise this back
+  # towards the old value to quieten them; it silences the board too.
+  intensity_threshold: 100.0
   # Below 3 m the board falls into the sparse lower elevation band, where the
   # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
   # third from the rest of the cluster. Measured in simulation, not guessed.

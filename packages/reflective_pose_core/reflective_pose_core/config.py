@@ -62,12 +62,15 @@ FLOOR_FIT_KEYS = tuple(
 class BoardParams:
     """The board itself. Shared by the runtime and offline paths."""
 
+    # The decided board (2026-09-10): 0.6 x 0.6 m, centre 1.3 m above the
+    # floor, at the map origin facing +x. Same numbers as the packaged file; a
+    # test holds the two together.
     pose_in_map: Tuple[float, float, float, float, float, float] = (
         0.0, 0.0, 1.300, 0.0, 0.0, 0.0
     )
     width: float = 0.6
-    height: float = 0.97
-    centre_height: float = 1.0
+    height: float = 0.6
+    centre_height: float = 1.3
 
 
 @dataclass
