@@ -253,6 +253,7 @@ def _print_rejections(result, stream=None):
                 f"    {index}. range={candidate.range_m:.2f} m "
                 f"n={candidate.n_points} "
                 f"extents={candidate.extents[0]:.2f}x{candidate.extents[1]:.2f} "
+                f"confidence={candidate.confidence:.2f} "
                 f"centre=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f})",
                 file=stream,
             )
@@ -566,10 +567,12 @@ def main(argv=None) -> int:
     _dump(anchor_result=result)
 
     detection = result.detection
+    terms = " ".join(f"{k}={v:.2f}" for k, v in detection.confidence_terms.items())
     print(
         f"board found: {detection.n_points} points, "
         f"extents {detection.extents[0]:.2f} x {detection.extents[1]:.2f} m, "
-        f"plane residual {detection.plane_residual * 100:.1f} cm"
+        f"plane residual {detection.plane_residual * 100:.1f} cm, "
+        f"confidence {detection.confidence:.2f} ({terms})"
     )
     print(f"floor tilt in the source frame: {result.floor_tilt_deg:.2f} deg")
     print("transform (map <- cloud):")

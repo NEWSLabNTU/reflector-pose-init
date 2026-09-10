@@ -151,6 +151,9 @@ def test_cli_writes_a_map_directory(tmp_path, capsys):
 
     printed = capsys.readouterr().out
     assert "board found" in printed
+    # The same confidence the runtime node gates on, so a map anchored to a
+    # weak detection is visible as such at the terminal.
+    assert "confidence 0." in printed
 
 
 def test_written_map_is_already_anchored(tmp_path):

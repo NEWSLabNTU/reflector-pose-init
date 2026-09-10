@@ -15,6 +15,7 @@ disagree.
 """
 
 import pytest
+import yaml
 
 from reflective_pose_core.config import (
     CONFIG_ENV_VAR,
@@ -23,6 +24,7 @@ from reflective_pose_core.config import (
     default_config_path,
     load_config,
 )
+from reflective_pose_core.detector import DetectorParams
 
 
 def write_config(path, pose):
@@ -179,3 +181,17 @@ def test_board_dataclass_defaults_agree_with_the_packaged_file(monkeypatch):
     packaged = load_config().board
 
     assert BoardParams() == packaged
+
+
+def test_min_confidence_is_a_detector_key(tmp_path, monkeypatch):
+    """The gate on what gets published lives beside the gates on what counts."""
+    config_file = tmp_path / "detector.yaml"
+    config_file.write_text("detector:\n  min_confidence: 0.9\n", encoding="utf-8")
+    assert load_config(str(config_file)).detector.min_confidence == 0.9
+
+    # The packaged file names it explicitly, with its reasoning, rather than
+    # inheriting the dataclass default silently.
+    monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+    document = yaml.safe_load(open(default_config_path(), encoding="utf-8"))
+    assert "min_confidence" in document["detector"]
+    assert load_config().detector.min_confidence == DetectorParams().min_confidence
