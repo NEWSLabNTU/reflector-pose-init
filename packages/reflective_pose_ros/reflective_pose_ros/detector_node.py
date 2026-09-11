@@ -56,7 +56,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from reflective_pose_core.config import load_config
-from reflective_pose_core.detector import detect_board
+from reflective_pose_core.detector import Status, detect_board
 from reflective_pose_core.geometry import (
     CovarianceParams,
     covariance_from_detection,
@@ -67,7 +67,13 @@ from reflective_pose_core.geometry import (
     quaternion_from_matrix,
 )
 
-from .debug_viz import board_pose_stamped, detection_points_cloud, rejection_marker_array
+from .debug_viz import (
+    board_outline_marker_array,
+    board_pose_stamped,
+    clear_all_marker,
+    detection_points_cloud,
+    rejection_marker_array,
+)
 from .decision import Verdict, judge
 
 
@@ -196,6 +202,11 @@ class BoardDetectorNode(Node):
         self._points_pub = self.create_publisher(PointCloud2, "~/debug/board_points", latched)
         self._pose_pub = self.create_publisher(PoseStamped, "~/debug/board_pose", latched)
         self._rejected_pub = self.create_publisher(MarkerArray, "~/debug/rejected", latched)
+        # The detected board's outline, nominal and measured (golf-cart phase 7,
+        # A5). Latched like the rest, so every batch publishes one.
+        self._outline_pub = self.create_publisher(
+            MarkerArray, "~/debug/board_outline", latched
+        )
         self._diagnostics_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
 
         self.create_timer(1.0, self._publish_diagnostics)
@@ -342,6 +353,7 @@ class BoardDetectorNode(Node):
             points, intensity, self._transform_base_sensor, self._detector_params
         )
         self._publish_clusters(result, frame_id)
+        self._publish_outline(result, frame_id)
 
         verdict = judge(result, self._min_confidence)
         self._last_verdict = verdict
@@ -413,6 +425,26 @@ class BoardDetectorNode(Node):
     def _publish_detection(self, detection, frame_id: str):
         stamp = self.get_clock().now().to_msg()
         self._pose_pub.publish(board_pose_stamped(detection, frame_id, stamp))
+
+    def _publish_outline(self, result, frame_id: str):
+        """The detected board's outline, or nothing, on every batch.
+
+        Drawn whenever the detector produced a detection, including one the
+        confidence gate then suppresses: a red, unobserved edge is usually why
+        it scored low, and this is where that shows. Cleared otherwise (no
+        candidate, or an ambiguous batch), because the topic is latched and an
+        outline from an earlier batch would sit on screen looking current.
+        """
+        stamp = self.get_clock().now().to_msg()
+        if result.status is Status.OK and result.detection is not None:
+            board = self._config.board
+            array = board_outline_marker_array(
+                result.detection, (board.width, board.height), frame_id, stamp
+            )
+        else:
+            array = MarkerArray()
+            array.markers.append(clear_all_marker())
+        self._outline_pub.publish(array)
 
     def _publish_clusters(self, result, frame_id: str):
         """Label every cluster this attempt looked at, kept or discarded.

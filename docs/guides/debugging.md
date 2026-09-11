@@ -38,8 +38,18 @@ ros2 topic echo /diagnostics
 ros2 topic list | grep board_detector
 ```
 
-The RViz displays show accepted board points, the board normal, and rejection
-labels. An `AMBIGUOUS candidate N` label means more than one cluster passed all
+The RViz displays show accepted board points, the board normal, rejection
+labels, and the detected board's outline on `~/debug/board_outline`. The outline
+is two rectangles in the board plane around the detected centre. Cyan is the
+configured board, which is what the published pose is composed from. The four
+separate edges are the measured extents: green where the detector saw that edge
+of the board, red where it did not. A red edge means the centre along that axis
+is a guess, which is the partial view the confidence gate discounts; an outline
+wider or taller than the cyan one means something next to the board was
+clustered with it, such as a second reflective band. The outline is drawn for
+every batch that produced a detection, including one the confidence gate then
+suppressed, since the edge colours are usually the reason; it is cleared on a
+batch with no candidate or an ambiguous one. An `AMBIGUOUS candidate N` label means more than one cluster passed all
 board gates; the node intentionally refuses to choose one.
 
 ## Capture an offline failure

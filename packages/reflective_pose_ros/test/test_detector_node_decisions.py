@@ -40,6 +40,8 @@ def node():
     node._board_pose_pub.publish = node._published.append
     node._diagnostics = []
     node._diagnostics_pub.publish = node._diagnostics.append
+    node._outlines = []
+    node._outline_pub.publish = node._outlines.append
     yield node
     node.destroy_node()
 
@@ -100,3 +102,43 @@ def test_min_confidence_comes_from_the_detector_file():
         assert node._min_confidence == node._config.detector.min_confidence
     finally:
         node.destroy_node()
+
+
+# -- the outline follows the verdict (golf-cart phase 7, A5) ------------------
+#
+# ~/debug/board_outline is latched, so whatever a batch leaves on it stays on
+# screen. Every batch therefore publishes one: the outline when it detected,
+# the clear-all alone when it did not, or a board from an earlier batch would
+# sit in RViz looking like a current one.
+
+
+def _namespaces(array):
+    return {m.ns for m in array.markers if m.action != m.DELETEALL}
+
+
+def test_a_detection_publishes_both_outlines(node):
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=5.0)[0]))
+    assert len(node._published) == 1
+    assert node._outlines[-1].markers[0].action == node._outlines[-1].markers[0].DELETEALL
+    assert _namespaces(node._outlines[-1]) == {"nominal", "measured"}
+
+
+def test_a_batch_without_a_detection_clears_the_outline(node):
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=5.0)[0]))
+    node._on_cloud(cloud_of(scenes.distractor_only_scene()))
+    assert len(node._outlines) == 2
+    assert _namespaces(node._outlines[-1]) == set()
+
+
+def test_an_ambiguous_batch_clears_the_outline(node):
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=5.0)[0]))
+    node._on_cloud(cloud_of(scenes.two_board_scene()))
+    assert _namespaces(node._outlines[-1]) == set()
+
+
+def test_a_low_confidence_detection_still_draws_its_outline(node):
+    """Suppressed, but still a detection: the outline is how you see why."""
+    node._min_confidence = 1.0
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=5.0)[0]))
+    assert node._published == []
+    assert _namespaces(node._outlines[-1]) == {"nominal", "measured"}

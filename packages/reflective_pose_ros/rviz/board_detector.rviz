@@ -142,6 +142,19 @@ Visualization Manager:
       Name: Detected Board
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
+      Name: Board outline
+      Namespaces:
+        measured: true
+        nominal: true
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /board_detector/debug/board_outline
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
       Name: Rejected clusters
       Namespaces:
         candidate: true

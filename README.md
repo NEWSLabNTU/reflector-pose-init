@@ -55,6 +55,7 @@ publishes:
 |---|---|
 | `~/board_pose` | `geometry_msgs/PoseWithCovarianceStamped` |
 | `~/debug/*` | markers and clouds for RViz |
+| `~/debug/board_outline` | `visualization_msgs/MarkerArray`, the detected board's outline |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` |
 
 It calls no service, so it is safe to run against a live stack. Without hardware,
