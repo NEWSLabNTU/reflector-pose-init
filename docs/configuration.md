@@ -207,6 +207,7 @@ exactly the parameters the node declares, with the node's own defaults.
 | `base_frame` | `base_link` | static TF to `sensor_frame` must exist |
 | `accumulate_scans` | `10` | scans stacked per detection attempt |
 | `twist_topic` | `""` | motion guard source; empty disables it |
+| `twist_type` | `""` | the motion source's message type; empty detects it at startup |
 | `max_speed_for_accumulation` | `0.05` | m/s above which scans are discarded |
 
 **Set `twist_topic` on a vehicle.** Stacking scans assumes a stationary sensor —
@@ -214,6 +215,14 @@ nothing deskews them — so a batch taken while the cart rolls is smeared and th
 board's extents measure wrong. Empty is correct on a bench and wrong on a
 vehicle; the node logs a warning when it is empty. `nav_msgs/Odometry` and
 `geometry_msgs/TwistStamped` are both accepted.
+
+**Set `twist_type` beside it.** Accepted: `nav_msgs/msg/Odometry`,
+`geometry_msgs/msg/TwistStamped` and `geometry_msgs/msg/TwistWithCovarianceStamped`,
+the last being what Autoware's `vehicle_velocity_converter` publishes. Left empty,
+the node picks the type from what the topic advertises when it starts, and on a
+vehicle the detector and the velocity source start together: a topic not yet
+advertised is subscribed as `Odometry` for the life of the node, and the guard
+never sees a message. Anything else is refused at startup, naming `twist_type`.
 
 ## board_pose_initializer.param.yaml
 
