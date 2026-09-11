@@ -36,6 +36,9 @@ def node():
     )
     node._transform_base_sensor = scenes.transform_base_sensor()
     node._detector_params = DetectorParams()
+    # The hand-built simulator scene uses the historical ground-level base_link
+    # convention; the packaged runtime policy supplies its offset separately.
+    node._runtime_height_offset = 0.0
     node._published = []
     node._board_pose_pub.publish = node._published.append
     node._diagnostics = []
@@ -97,6 +100,6 @@ def test_low_confidence_batch_is_suppressed_with_the_reason(node):
 def test_min_confidence_comes_from_the_detector_file():
     node = BoardDetectorNode()
     try:
-        assert node._min_confidence == node._config.detector.min_confidence
+        assert node._min_confidence == node._config.runtime_detector.min_confidence
     finally:
         node.destroy_node()

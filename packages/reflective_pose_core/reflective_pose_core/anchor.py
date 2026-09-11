@@ -39,7 +39,6 @@ from .pointcloud_io import PointCloud
 class AnchorParams:
     """Anchoring inputs. Detection gates come from DetectorParams."""
 
-    board_centre_height: float = 1.075
     board_width: float = 0.8
     board_height: float = 1.0
     # [x, y, z, roll, pitch, yaw], radians. This is shared with the runtime
@@ -70,24 +69,28 @@ class AnchorResult:
 def detector_params_for_map(base: Optional[DetectorParams] = None) -> DetectorParams:
     """Detection thresholds adjusted for a merged map rather than one scan.
 
-    Two gates are meaningless here and are turned off rather than retuned:
+    A map's configured range and density policy is preserved. The packaged map
+    policy disables both because distance from a merged-cloud origin and a
+    single-view return-count model are not useful defaults, but custom map
+    policies may deliberately enable either gate.
 
-    - **Range.** Distances in a map are measured from an arbitrary origin, not
-      from a sensor, so a range window rejects the board for no reason.
-    - **Density.** The expected return count assumes one scan from one
-      viewpoint. A map merges many, so the count is unbounded from above and
-      the gate would reject every real board.
-
-    Everything geometric — planarity, verticality, extent, mounting height —
-    still applies, and those are the gates that separate the board from the exit
-    signage anyway.
+    The map policy's AABB is applied by ``anchor_cloud`` before this function's
+    detector call. Its Z slab is therefore the only map point-height gate;
+    resolved map parameters carry unbounded height values here as a defensive
+    invariant.
     """
-    params = base or DetectorParams()
-    return replace(
-        params,
+    params = base or DetectorParams(
         range_min=0.0,
         range_max=float("inf"),
+        height_min=-float("inf"),
+        height_max=float("inf"),
         density_check_enabled=False,
+        scan_count=1,
+    )
+    return replace(
+        params,
+        height_min=-float("inf"),
+        height_max=float("inf"),
         scan_count=1,
     )
 
@@ -173,10 +176,11 @@ def anchor_cloud(
     one board, and picking between two would define the map frame off the wrong
     object — an error with no later symptom except that everything is shifted.
 
-    ``aabb`` is an optional map-only crop in the levelled, floor-zero
+    ``aabb`` is the required map-only crop in the levelled, floor-zero
     ``map_debug`` frame. It restricts detector input; floor fitting, viewpoint
     calculation, and the cloud written to the anchored map still use every
-    point. When omitted, a ``map_aabb`` attached to ``detector_params`` is used.
+    point. The explicit argument keeps the frame and the filtering policy at
+    the same seam instead of hiding a crop inside runtime detector params.
 
     ``on_result``, if given, is called with ``(levelled_points, intensity,
     DetectResult, viewpoint)`` right after detection runs and before either
@@ -186,6 +190,10 @@ def anchor_cloud(
     concerns that would otherwise pull in.
     """
     params = params or AnchorParams()
+    if aabb is None:
+        raise ValueError(
+            "map AABB is required in the levelled, floor-zero map_debug frame"
+        )
     if cloud.intensity is None:
         raise ValueError(
             "cloud has no intensity channel; the board cannot be found without it "
@@ -211,24 +219,20 @@ def anchor_cloud(
 
     map_params = detector_params_for_map(detector_params)
     map_params.viewpoint = viewpoint
-    aabb = map_params.map_aabb if aabb is None else aabb
-    detection_points = levelled
-    detection_intensity = intensity
-    n_inside_aabb = len(levelled)
-    if aabb is not None:
-        inside_aabb = aabb.contains(levelled)
-        n_inside_aabb = int(np.count_nonzero(inside_aabb))
-        detection_points = levelled[inside_aabb]
-        detection_intensity = intensity[inside_aabb]
+    inside_aabb = aabb.contains(levelled)
+    n_inside_aabb = int(np.count_nonzero(inside_aabb))
+    detection_points = levelled[inside_aabb]
+    detection_intensity = intensity[inside_aabb]
 
     result: DetectResult = detect_board(
-        detection_points, detection_intensity, np.eye(4), map_params
+        detection_points, detection_intensity, np.eye(4), map_params,
+        height_offset=0.0,
     )
 
     if on_result is not None:
         on_result(levelled, intensity, result, viewpoint)
 
-    if aabb is not None and n_inside_aabb == 0:
+    if n_inside_aabb == 0:
         raise ValueError(
             "no points inside map AABB in the levelled, floor-zero map_debug "
             f"frame (min={aabb.minimum}, max={aabb.maximum})"

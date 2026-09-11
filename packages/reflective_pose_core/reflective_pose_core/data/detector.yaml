@@ -1,139 +1,71 @@
-# The detector file: what the board detector looks for and how it judges it.
+# Detector contract shared by the runtime node and map anchoring tool.
 #
-# Read by two things, and by nothing else:
+# Every absolute height below is measured from physical ground. Runtime TF
+# points are expressed in base_link, so detector.runtime adds
+# base_link_height_above_ground before applying its height gates. Map points are
+# levelled with floor z=0, so detector.map uses no height_min/height_max; its
+# required AABB owns the complete map spatial crop, including Z.
 #
-#   board_detector_node    (reflective_pose_ros)  parameter `config_file`
-#   anchor-map-to-board    (reflective_pose_cli)  option    `--config`
-#
-# Three sections:
-#
-#   board:      the board itself. Both readers use it, so the map anchored
-#               offline and the pose guessed at runtime cannot drift apart.
-#   detector:   the gates detect_board applies. Sensor properties, mostly.
-#   covariance: the covariance a published guess carries.
-#
-# Nothing about topics, frames, services or floor fitting belongs here. The
-# node's wiring is ROS parameters (board_detector.param.yaml in
-# reflective_pose_ros), the Autoware handoff policy likewise
-# (board_pose_initializer.param.yaml in reflective_pose_autoware), and the
-# anchoring tool's floor-fit knobs are its own flags. A file carrying a
-# `ros:`, `autoware:` or `anchor:` section is rejected and told so.
-#
-# The numbers below are measurements where a comment says so. Read the comment
-# before changing the value.
+# Use signed -.inf / .inf for unbounded AABB sides. An empty YAML value is not a
+# second spelling for an unbounded side.
 
 board:
-  # [x, y, z, roll, pitch, yaw]. Rotation is intrinsic Rz(yaw) @ Ry(pitch) @
-  # Rx(roll); angles are radians. Shared by runtime init and offline anchoring.
+  # [x, y, z, roll, pitch, yaw], radians. z is the board centre in the output
+  # map; detector policy heights below are the ground-relative measurements.
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
-  # Decided 2026-09-10: the board is 0.6 x 0.6 m with its centre 1.3 m above
-  # the floor. The earlier 0.97 m height was a guess from a map cluster whose
-  # vertical extent happened to be 0.97 m, which the delivered anchor showed
-  # was the board plus a second reflective band above it.
   width: 0.6
   height: 0.6
-  centre_height: 1.3
 
 detector:
-  # VLP-32C reports calibrated reflectivity: 0-100 diffuse, 101-255 reserved
-  # for retroreflectors. 100 is the bottom edge of that band, so this is a
-  # sensor contract rather than a tuning -- and, unlike the 240 it replaces
-  # (decided 2026-09-10), one the board actually reaches. Measured over the
-  # replay bag vlp32_1 (2026-08-20 basement survey), every twelfth scan,
-  # cluster_min_points being 60:
-  #
-  #   threshold | points per scan (median / p90 / max) | scans with >= 60 points
-  #   > 240     |    0 /   2 /   5                     |   0 of 197
-  #   > 200     |   30 /  84 / 123                     |  43 of 197
-  #   > 150     |  166 / 317 / 654                     | 188 of 197
-  #   > 100     |  361 / 559 / 996                     | 197 of 197
-  #   >= 100   |  401 / 579 / 1036                    | 197 of 197
-  #
-  # The gate is >=, so 100 admits the ~40 returns per scan that read
-  # exactly 100, the top of the diffuse band; they are scattered, not a
-  # cluster, and the geometry sorts them like the rest. (>150 read 317 at
-  # p90 in the phase doc and 316 here: same scans, rounding.)
-  #
-  # No scan cleared cluster_min_points at 240: the detector could not produce
-  # a candidate anywhere in that drive, with nothing wrong in the geometry, the
-  # TF or the board. The cost of 100 is the other direction: everything
-  # retroreflective in the basement now passes this gate -- tape, signs,
-  # vests, a reflective band above the board itself -- and the clustering and
-  # shape gates below are what sort it, with the confidence gate and a
-  # non-terminal AMBIGUOUS (phase 7, A1 and A2). Do not raise this back
-  # towards the old value to quieten them; it silences the board too.
+  # VLP-32C calibrated reflectivity. 100 is the lowest value that admitted
+  # every replayed board scan; geometry and confidence reject other reflectors.
   intensity_threshold: 100.0
-  # Below 3 m the board falls into the sparse lower elevation band, where the
-  # 9.4 deg gap between the -25.0 and -15.6 deg beams disconnects its bottom
-  # third from the rest of the cluster. Measured in simulation, not guessed.
-  range_min: 3.0
-  range_max: 18.0
-  # Point heights above base_link kept before clustering. The board spans
-  # 1.0 to 1.6 m; the old 1.5 clipped its top 0.1 m in every detection on
-  # the replay bag (cluster z topped out at 1.499, height read 0.50). 1.65
-  # rather than something looser because a second retroreflective band sits
-  # directly above the board, 1.7 to 1.9 m with a 0.1 m gap, and
-  # cluster_tolerance bridges 0.1 m: with height_max 1.7 the band merged
-  # into the board in 2 of 9 stationary batches and lifted the centre 6 to
-  # 9 cm. Measured on vlp32_1, 2026-09-10.
-  height_min: 0.5
-  height_max: 1.65
-
-  # Governed by across-ring spacing, not within-ring spacing. The board
-  # centre is 0.66 m below the cart's sensor, so at 5 m it sits at -7.5 deg
-  # elevation where the VLP-32C's rings are 1.1 to 1.6 deg apart, 0.1 to
-  # 0.14 m; below 4 m it reaches the 2.5 to 4.3 deg gaps. Measured on
-  # vlp32_1 (235 batches of 10 stacked scans): at the old 0.05 the board
-  # split into ring stripes and nothing was detected in the whole bag; at
-  # 0.10 the stationary 12 m batches all detected but the 3 m pass lost a
-  # ring (bad_height 0.43); at 0.15 both detect. The cost of 0.15 is the
-  # band above the board, handled by height_max.
-  cluster_tolerance: 0.15
-  cluster_min_points: 60
-
-  extent_tolerance: [0.8, 1.5]      # fraction of nominal
-  planarity_max_thickness: 0.08
-  verticality_max_dot: 0.25
-  centre_height_tolerance: 0.30
-
-  # Upper bound only: yaw, occlusion, and dropout legitimately reduce the
-  # return count, but nothing legitimately inflates it.
-  density_max_ratio: 1.4
-  density_check_enabled: true
-  azimuth_step_rad: 0.0035          # 0.2 deg at 600 rpm / 10 Hz
-
-  # Optional map-only crop in the levelled, floor-zero map_debug frame. It is
-  # applied only to detector input; floor fitting, viewpoint calculation, and
-  # the anchored output cloud still use the full map. Use -.inf for an
-  # unbounded lower axis and .inf for an unbounded upper axis.
-  map_aabb:
-    min: [-.inf, -.inf, 0.5]
-    max: [.inf, .inf, 1.65]
-
-  # The gate on what gets published. Every surviving cluster carries one
-  # confidence in [0, 1], a weighted mean of five terms the gates above
-  # already measured -- plane residual, extent error, return density, the
-  # bounding edges actually seen (double weight: a hidden edge is the one
-  # defect that biases the centre rather than merely widening the
-  # covariance), and range (half weight; the covariance already grows with
-  # it). See confidence_terms() in reflective_pose_core.detector. The node
-  # publishes no pose below this value and says which terms dragged it
-  # down on /diagnostics; nothing is terminal, the next batch is judged
-  # afresh.
-  #
-  # 0.6 sits between the two populations the simulator produces, with the
-  # same margin either side: a clean board scores 0.86-0.93 across 3-15 m,
-  # and yaw to 60 deg, blooming, or 70 % dropout still 0.79-0.90, while a
-  # board with one bounding edge hidden -- the case the gate exists for --
-  # scores 0.55. The replay bag's detections (vlp32_1) score 0.85 to 0.89
-  # stationary at 12 m and 0.80 passing at 3 m; its one partial view of the
-  # board -- one edge hidden, 251 points -- scores 0.52 and is kept out.
+  azimuth_step_rad: 0.0035
   min_confidence: 0.6
 
+  runtime:
+    # Positive offset: z_ground = z_base_link + this value. The real
+    # base_link <- sensor TF remains unchanged for range and pose calculations.
+    # This scalar assumes base_link z is aligned with gravity; use a
+    # gravity-aligned height frame if the vehicle has meaningful roll/pitch.
+    base_link_height_above_ground: 0.265
+    range_min: 3.0
+    range_max: 18.0
+    # Ground-relative point-height gate, applied after the offset above.
+    height_min: 0.5
+    height_max: 1.65
+    cluster_tolerance: 0.20
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: true
+
+  map:
+    # Required inclusive crop in the levelled, floor-zero map_debug frame.
+    # The AABB z slab is the map point-height filter; do not add height_min or
+    # height_max here. Ideally this board centre matches pose_in_map[2] when
+    # the runtime offset and floor fit are correct and map ground is z=0.
+    aabb:
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.65]
+    range_min: 0.0
+    range_max: .inf
+    cluster_tolerance: 0.15
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: false
+
 covariance:
-  # Loose on purpose. The pose is handed on as a guess for a scan matcher to
-  # refine; an over-tight covariance makes it search too small a window, while
-  # an over-loose one costs a few hundred milliseconds.
+  # Loose on purpose: the pose is a guess for a scan matcher to refine.
   sigma_xy_base: 0.15
   sigma_xy_per_metre: 0.03
   sigma_z: 0.10

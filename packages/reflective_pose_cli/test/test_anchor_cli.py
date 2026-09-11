@@ -8,12 +8,14 @@ from reflective_pose_core.anchor import (
     anchor_cloud,
     anchored_board_centre,
 )
+from reflective_pose_core.detector import Aabb
 from reflective_pose_core.geometry import make_transform
 from reflective_pose_core.pointcloud_io import PointCloud, read_cloud
 from reflective_pose_cli.anchor_cli import main
 from reflective_pose_sim import scenes, vlp32_sim
 
 BOARD_CENTRE_HEIGHT = scenes.BOARD_CENTRE_HEIGHT
+FULL_MAP_AABB = Aabb((None, None, None), (None, None, None))
 
 # Sensor poses in the room frame: (x, y, heading). The board is fixed at the
 # room origin facing +x, so each scan sees the same board from a different
@@ -80,29 +82,22 @@ def build_map_cloud(source_pose=None, with_distractors=True, seeds=(1, 2, 3)):
 def write_config(
     path, pose="[0.0, 0.0, 1.075, 0.0, 0.0, 0.0]", map_aabb=None
 ):
-    """A minimal canonical config: the board section, and defaults elsewhere.
-
-    Only ``board:`` is written because that is the section this tool's answer
-    depends on. Omitting ``detector:`` leaves the map policy at its independent
-    defaults, which is what a bare ``anchor_cloud(cloud)`` uses. A map AABB is
-    deliberately nested under the detector section because it is a map-only
-    input filter, not a second board or floor-fit configuration.
-    """
-    map_section = ""
-    if map_aabb is not None:
-        minimum, maximum = map_aabb
-        map_section = f"""detector:
-  map_aabb:
-    min: [{', '.join(str(value) for value in minimum)}]
-    max: [{', '.join(str(value) for value in maximum)}]
-"""
+    """A minimal canonical config with the required map AABB."""
+    if map_aabb is None:
+        map_aabb = (("-.inf", "-.inf", "-.inf"), (".inf", ".inf", ".inf"))
+    minimum, maximum = map_aabb
     path.write_text(
         f"""board:
   pose_in_map: {pose}
   width: 0.8
   height: 1.0
-  centre_height: {BOARD_CENTRE_HEIGHT}
-{map_section}
+
+detector:
+  map:
+    board_centre_height: {BOARD_CENTRE_HEIGHT}
+    aabb:
+      min: [{', '.join(str(value) for value in minimum)}]
+      max: [{', '.join(str(value) for value in maximum)}]
 """
     )
 
@@ -182,7 +177,7 @@ def test_written_map_is_already_anchored(tmp_path):
     written = read_cloud(str(output / "pointcloud_map.pcd"))
     assert written.has_intensity
 
-    again = anchor_cloud(written)
+    again = anchor_cloud(written, aabb=FULL_MAP_AABB)
     centre = anchored_board_centre(again)
     assert abs(centre[0]) < 0.02
     assert abs(centre[1]) < 0.02
@@ -276,6 +271,7 @@ def test_cli_places_board_at_configured_translation_and_yaw(tmp_path):
         params=AnchorParams(
             board_pose_in_map=(12.0, -4.0, 1.075, 0.0, 0.0, 1.57079632679)
         ),
+        aabb=FULL_MAP_AABB,
     )
     assert np.allclose(result.transform_map_cloud, np.eye(4), atol=0.05)
 

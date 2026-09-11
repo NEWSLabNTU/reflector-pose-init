@@ -207,3 +207,62 @@ def test_detection_rate_across_seeds(seed):
     )
     assert position < POSITION_TOLERANCE
     assert yaw < YAW_TOLERANCE
+
+
+def test_runtime_height_offset_converts_base_link_height_to_ground():
+    """The height offset changes the height gate, not the sensor geometry."""
+    y, z = np.meshgrid(np.linspace(-0.4, 0.4, 20), np.linspace(-0.5, 0.5, 20))
+    points = np.column_stack(
+        (np.full(y.size, 6.0), y.ravel(), (-0.525 + z).ravel())
+    )
+    intensity = np.full(len(points), 255.0)
+    params = DetectorParams(
+        board_width=0.8,
+        board_height=1.0,
+        centre_height_tolerance=0.05,
+        height_min=0.0,
+        height_max=1.8,
+        density_check_enabled=False,
+    )
+    base_link_from_sensor = scenes.transform_base_sensor(scenes.SENSOR_HEIGHT - 0.265)
+
+    without_offset = detect_board(
+        points, intensity, base_link_from_sensor, params
+    )
+    with_offset = detect_board(
+        points,
+        intensity,
+        base_link_from_sensor,
+        params,
+        height_offset=0.265,
+    )
+
+    assert without_offset.status is Status.NO_CANDIDATE
+    assert any(r.reason == "bad_mount_height" for r in without_offset.rejections)
+    assert with_offset.status is Status.OK
+
+
+def test_runtime_height_offset_does_not_change_range_or_pose_geometry():
+    scene, _ = scenes.board_scene(range_m=6.0)
+    scan = vlp32_sim.simulate(scene, vlp32_sim.SimParams(seed=1))
+    params = DetectorParams(height_min=0.0, height_max=2.0)
+    base_link_from_sensor = scenes.transform_base_sensor(scenes.SENSOR_HEIGHT - 0.265)
+
+    without_offset = detect_board(
+        scan.points, scan.intensity, base_link_from_sensor, params
+    )
+    with_offset = detect_board(
+        scan.points,
+        scan.intensity,
+        base_link_from_sensor,
+        params,
+        height_offset=0.265,
+    )
+
+    assert without_offset.status is Status.OK
+    assert with_offset.status is Status.OK
+    assert with_offset.detection.n_points == without_offset.detection.n_points
+    assert with_offset.detection.range_m == pytest.approx(
+        without_offset.detection.range_m
+    )
+    assert np.allclose(with_offset.detection.centre, without_offset.detection.centre)
