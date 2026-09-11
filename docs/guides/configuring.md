@@ -63,26 +63,41 @@ board:
   pose_in_map: [0.0, 0.0, 1.3, 0.0, 0.0, 0.0]
   width: 0.6
   height: 0.6
-  centre_height: 1.3
 
 detector:
   intensity_threshold: 100.0
-  range_min: 3.0
-  range_max: 18.0
-  height_min: 0.5
-  height_max: 1.65
-  cluster_tolerance: 0.15
-  cluster_min_points: 60
-  extent_tolerance: [0.8, 1.5]
-  planarity_max_thickness: 0.08
-  verticality_max_dot: 0.25
-  centre_height_tolerance: 0.30
-  density_max_ratio: 1.4
-  density_check_enabled: true
   azimuth_step_rad: 0.0035
-  map_aabb:
-    min: [-.inf, -.inf, 0.5]
-    max: [.inf, .inf, 1.65]
+  min_confidence: 0.6
+  runtime:
+    base_link_height_above_ground: 0.265
+    range_min: 3.0
+    range_max: 18.0
+    height_min: 0.5
+    height_max: 1.65
+    cluster_tolerance: 0.15
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: true
+  map:
+    aabb:
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.65]
+    range_min: 0.0
+    range_max: .inf
+    cluster_tolerance: 0.15
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: false
 
 covariance:
   sigma_xy_base: 0.15
@@ -94,51 +109,56 @@ covariance:
   unconstrained_axis_sigma: 1.0
 ```
 
-`board.width`, `board.height`, and `board.centre_height` are copied into the
-typed detector and anchoring parameters by the loader. Set them once under
-`board`; do not create runtime-only or map-only copies.
+`board.width` and `board.height` are shared physical geometry. The runtime and
+map policies intentionally have separate gate values, including separate
+`board_centre_height` values. Do not flatten them into one detector block.
 
-`board.centre_height` is the board centre above the local floor. It is not
-necessarily the same quantity as `board.pose_in_map[2]`, which is a coordinate
-in the final map frame. They are normally equal for a floor-level map.
+All absolute heights are measured from physical ground. `board.pose_in_map[2]`
+is the board's target coordinate in the output map. It is independent from
+`detector.runtime.board_centre_height` and `detector.map.board_centre_height`;
+with a correct floor-zero map, the map policy value should normally match it,
+but neither value is derived from the other.
 
 ## Map AABB
 
-`detector.map_aabb` is an optional, inclusive spatial crop for map anchoring.
-It is evaluated after floor levelling in the floor-zero `map_debug` frame:
+`detector.map.aabb` is a required, inclusive crop for map anchoring. It is
+evaluated after floor levelling in the floor-zero `map_debug` frame:
 
 ```yaml
 detector:
-  map_aabb:
-    min: [-.inf, -5.0, 0.5]
-    max: [12.0, .inf, 1.65]
+  map:
+    aabb:
+      min: [-.inf, -5.0, 0.5]
+      max: [12.0, .inf, 1.65]
 ```
 
 Use `-.inf` only for an unbounded lower side and `.inf` only for an unbounded
-upper side. This is the canonical YAML spelling; do not use `null` for an
-individual coordinate. Omit `map_aabb` when no crop is needed. An explicit
-`map_aabb: null` disables the entire optional crop; it is different from an
-unbounded side and is retained only as a convenient compatibility spelling.
+upper side. This is the canonical YAML spelling. Do not use `null`, and do not
+omit the AABB; an unbounded side is written explicitly with signed infinity.
+The loader rejects null or omitted AABB bounds.
 
 The AABB filters only the points passed to board detection. Floor fitting,
 viewpoint calculation, and the anchored output cloud still use the full map.
 The live detector does not apply this map-only crop.
 
-The map AABB is not a replacement for the detector's height or centre-height
-gates. The former removes points before clustering; the latter checks the
-candidate's measured centre after geometry is fitted. Keep the AABB broad
-enough to contain the board and inspect `map_debug` coordinates when it yields
-`no points inside map AABB`.
+The map AABB is the sole map spatial and point-Z filter. Map mode therefore has
+no `height_min` or `height_max`; its resolved detector height bounds are
+unbounded. `detector.map.board_centre_height` still checks the fitted candidate
+centre against physical ground, but is not a second point-height crop. Keep the
+AABB broad enough to contain the board and inspect `map_debug` coordinates when
+it yields `no points inside map AABB`.
 
 ## How the gates are applied
 
 Detection is staged. The first failing stage determines which setting to
 inspect:
 
-1. **Point gates:** keep points with `intensity >= intensity_threshold`,
-   `range_min <= range <= range_max`, and
-   `height_min <= height <= height_max`. Runtime heights are in `base_link`;
-   map heights are in the levelled, floor-zero frame.
+1. **Point gates:** runtime keeps points with
+   `intensity >= detector.intensity_threshold`, the runtime range bounds, and
+   `height_min <= z_base_link + base_link_height_above_ground <= height_max`.
+   The offset is added only for height checks; the real TF remains unchanged.
+   Map anchoring first applies `detector.map.aabb`, then the map intensity and
+   range gates. Its AABB z slab is the only map point-height band.
 2. **Clustering:** join nearby kept points using `cluster_tolerance`; discard
    clusters smaller than `cluster_min_points`.
 3. **Planarity:** fit a plane and require RMS thickness to be at most
@@ -147,8 +167,8 @@ inspect:
    vertical board has a normal perpendicular to up, so its value is near zero.
 5. **Extent:** project the cluster onto board-aligned horizontal and vertical
    axes and compare its measured width and height with the nominal board.
-6. **Mounting height:** require the fitted centre height to be within
-   `board.centre_height ± centre_height_tolerance`.
+6. **Mounting height:** require the fitted centre height above ground to be
+   within the active policy's `board_centre_height ± centre_height_tolerance`.
 7. **Density:** when enabled, reject only clusters whose return count is above
    `density_max_ratio` times the sensor-model expectation. Dropout and
    occlusion reduce counts legitimately, so this is not a minimum-return gate.
@@ -165,14 +185,14 @@ stacked scans; `scan_count` is not a separate YAML tuning knob.
 
 | Observation | Inspect first | Typical action | Risk of loosening |
 |---|---|---|---|
-| `n_after_gates` is too small | intensity, range, height frame and bounds | Correct the sensor contract or widen the point band | Diffuse returns and unrelated reflectors enter clustering |
+| `n_after_gates` is too small | intensity, range, runtime ground offset/bounds, or map AABB | Correct the sensor contract or widen the active point filter | Diffuse returns and unrelated reflectors enter clustering |
 | `n_clusters` is zero or the board is split | `cluster_tolerance`, `cluster_min_points`, scan motion | Bridge adjacent LiDAR rings or lower the minimum only for a known sparse view | Separate reflectors merge |
 | `not_planar` | merged clusters, map noise, motion smear | Fix clustering or motion first; then raise the thickness limit only for measured noise | Walls and merged objects can pass |
 | `not_vertical` | TF, board mounting, `verticality_max_dot` | Fix frame/mounting assumptions; widen only for an allowed tilt | Horizontal surfaces become candidates |
 | `bad_width` / `bad_height` | board dimensions, occlusion, extent values | Correct `board.width/height`; adjust extent factors only for systematic observation bias | A wrong size makes another object look plausible |
-| `bad_mount_height` | floor datum, `board.centre_height`, tolerance | Fix the frame or shared height; widen tolerance only for known variation | Reflectors at other heights survive |
+| `bad_mount_height` | ground datum, active policy `board_centre_height`, tolerance | Fix the runtime offset or map floor, then review the policy height; widen tolerance only for known variation | Reflectors at other heights survive |
 | `too_dense` | scan count, motion, merged clusters, density model | Make `accumulate_scans` match the batch and fix merging/motion; then review the upper ratio | Large unrelated clusters survive |
-| `AMBIGUOUS` | visible reflectors and map AABB | Remove the second candidate or constrain the map crop | Picking one can shift the entire map |
+| `AMBIGUOUS` | visible reflectors and `detector.map.aabb` | Remove the second candidate or constrain the map crop | Picking one can shift the entire map |
 
 ### `extent_tolerance` in detail
 
@@ -207,7 +227,7 @@ The detector node's separate `board_detector.param.yaml` contains:
 
 | Key | Meaning |
 |---|---|
-| `sensor_frame` / `base_frame` | cloud frame and frame used for runtime heights |
+| `sensor_frame` / `base_frame` | cloud frame and TF frame used for runtime heights; the runtime policy adds its base-link ground offset |
 | `accumulate_scans` | scans per detection attempt; becomes detector `scan_count` |
 | `twist_topic` | optional `Odometry` or `TwistStamped` motion source |
 | `max_speed_for_accumulation` | speed above which an accumulated batch is discarded |

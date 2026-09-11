@@ -18,12 +18,13 @@ from reflective_pose_core.anchor import (
     detector_params_for_map,
     fit_floor,
 )
-from reflective_pose_core.detector import Aabb, Status
+from reflective_pose_core.detector import Aabb, DetectorParams, Status
 from reflective_pose_core.geometry import make_transform
 from reflective_pose_core.pointcloud_io import PointCloud
 from reflective_pose_sim import scenes, vlp32_sim
 
 BOARD_CENTRE_HEIGHT = scenes.BOARD_CENTRE_HEIGHT
+FULL_MAP_AABB = Aabb((None, None, None), (None, None, None))
 
 
 def rotation_z(angle):
@@ -98,9 +99,26 @@ def anchored_board_centre(result):
     return result.transform_map_cloud[:3, :3] @ centre + result.transform_map_cloud[:3, 3]
 
 
+def test_map_aabb_is_required_at_the_anchor_seam():
+    with pytest.raises(ValueError, match="map AABB is required"):
+        anchor_cloud(build_map_cloud())
+
+
+def test_map_param_adapter_preserves_explicit_range_and_density_policy():
+    params = detector_params_for_map(
+        DetectorParams(range_min=2.0, range_max=9.0, density_check_enabled=True)
+    )
+
+    assert params.range_min == 2.0
+    assert params.range_max == 9.0
+    assert params.density_check_enabled is True
+    assert params.height_min == float("-inf")
+    assert params.height_max == float("inf")
+
+
 def test_board_lands_at_the_origin():
     cloud = build_map_cloud()
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
 
     centre = anchored_board_centre(result)
     assert abs(centre[0]) < 0.10
@@ -113,7 +131,7 @@ def test_anchoring_undoes_an_arbitrary_source_frame():
     source_pose = make_transform(rotation_z(1.1), [37.0, -12.0, 4.5])
     cloud = build_map_cloud(source_pose=source_pose)
 
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
     centre = anchored_board_centre(result)
 
     assert abs(centre[0]) < 0.10
@@ -124,10 +142,9 @@ def test_anchoring_undoes_an_arbitrary_source_frame():
 def test_map_height_gate_is_invariant_to_source_frame_z_translation():
     """Map heights are measured after fitting the source cloud's floor."""
     map_params = detector_params_for_map()
-    map_params.height_min = 0.5
-    map_params.height_max = 1.7
     map_params.board_centre_height = BOARD_CENTRE_HEIGHT
     map_params.planarity_max_thickness = 0.08
+    aabb = Aabb((None, None, 0.5), (None, None, 1.7))
 
     for source_z in (0.0, 17.0):
         result = anchor_cloud(
@@ -137,6 +154,7 @@ def test_map_height_gate_is_invariant_to_source_frame_z_translation():
                 )
             ),
             detector_params=map_params,
+            aabb=aabb,
         )
         assert result.detection is not None
 
@@ -181,7 +199,7 @@ def test_anchoring_places_board_at_configured_pose():
     params = AnchorParams(
         board_pose_in_map=(12.0, -4.0, BOARD_CENTRE_HEIGHT, 0.0, 0.0, np.pi / 2)
     )
-    result = anchor_cloud(build_map_cloud(), params)
+    result = anchor_cloud(build_map_cloud(), params, aabb=FULL_MAP_AABB)
     centre = anchored_board_centre(result)
     assert np.allclose(centre, params.board_pose_in_map[:3], atol=0.10)
     normal = result.transform_map_cloud[:3, :3] @ result.detection.normal
@@ -190,7 +208,7 @@ def test_anchoring_places_board_at_configured_pose():
 
 def test_map_x_points_along_the_board_normal():
     cloud = build_map_cloud()
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
 
     normal = result.transform_map_cloud[:3, :3] @ np.asarray(result.detection.normal)
     assert normal[0] == pytest.approx(1.0, abs=0.05)
@@ -199,7 +217,7 @@ def test_map_x_points_along_the_board_normal():
 
 def test_floor_lands_at_zero_after_anchoring():
     cloud = build_map_cloud()
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
     anchored = apply_transform(cloud, result.transform_map_cloud)
 
     floor = anchored.points[anchored.points[:, 2] < 0.2]
@@ -209,7 +227,7 @@ def test_floor_lands_at_zero_after_anchoring():
 
 def test_intensity_survives_anchoring():
     cloud = build_map_cloud()
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
     anchored = apply_transform(cloud, result.transform_map_cloud)
 
     assert anchored.has_intensity
@@ -221,7 +239,7 @@ def test_slightly_tilted_source_frame_is_levelled():
     source_pose = make_transform(rotation_y(np.radians(1.5)), [0.0, 0.0, 0.0])
     cloud = build_map_cloud(source_pose=source_pose)
 
-    result = anchor_cloud(cloud)
+    result = anchor_cloud(cloud, aabb=FULL_MAP_AABB)
     assert result.floor_tilt_deg == pytest.approx(1.5, abs=0.5)
 
     anchored = apply_transform(cloud, result.transform_map_cloud)
@@ -234,7 +252,7 @@ def test_badly_tilted_cloud_is_rejected_rather_than_levelled():
     cloud = build_map_cloud(source_pose=source_pose)
 
     with pytest.raises(ValueError, match="not gravity-aligned"):
-        anchor_cloud(cloud)
+        anchor_cloud(cloud, aabb=FULL_MAP_AABB)
 
 
 def test_cloud_without_intensity_is_refused():
@@ -242,7 +260,7 @@ def test_cloud_without_intensity_is_refused():
     stripped = PointCloud(points=cloud.points, intensity=None)
 
     with pytest.raises(ValueError, match="no intensity"):
-        anchor_cloud(stripped)
+        anchor_cloud(stripped, aabb=FULL_MAP_AABB)
 
 
 def test_two_boards_refuse_to_define_a_frame():
@@ -255,7 +273,7 @@ def test_two_boards_refuse_to_define_a_frame():
     )
 
     with pytest.raises(ValueError, match="candidates"):
-        anchor_cloud(cloud)
+        anchor_cloud(cloud, aabb=FULL_MAP_AABB)
 
 
 def test_distractors_alone_yield_no_anchor():
@@ -267,7 +285,7 @@ def test_distractors_alone_yield_no_anchor():
     )
 
     with pytest.raises(ValueError, match="no board found"):
-        anchor_cloud(cloud)
+        anchor_cloud(cloud, aabb=FULL_MAP_AABB)
 
 
 def test_on_result_still_fires_when_detection_fails():
@@ -290,7 +308,7 @@ def test_on_result_still_fires_when_detection_fails():
         captured["result"] = result
 
     with pytest.raises(ValueError, match="no board found"):
-        anchor_cloud(cloud, on_result=on_result)
+        anchor_cloud(cloud, aabb=FULL_MAP_AABB, on_result=on_result)
 
     assert captured, "on_result must run before the failure is raised"
     assert captured["result"].status is Status.NO_CANDIDATE
@@ -305,6 +323,7 @@ def test_on_result_fires_on_success_too():
 
     result = anchor_cloud(
         cloud,
+        aabb=FULL_MAP_AABB,
         on_result=lambda levelled, intensity, detect_result, viewpoint: captured.update(
             result=detect_result
         ),

@@ -97,27 +97,41 @@ board:                        # shared truth: runtime AND offline anchoring
   pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]   # x y z roll pitch yaw, radians
   width: 0.6
   height: 0.6
-  centre_height: 1.3
 
 detector:                     # core
   intensity_threshold: 100.0
-  range_min: 3.0
-  range_max: 18.0
-  height_min: 0.5
-  height_max: 1.65
-  cluster_tolerance: 0.15
-  cluster_min_points: 60
-  extent_tolerance: [0.8, 1.5]
-  planarity_max_thickness: 0.08
-  verticality_max_dot: 0.25
-  centre_height_tolerance: 0.30
-  density_max_ratio: 1.4
-  density_check_enabled: true
   azimuth_step_rad: 0.0035
   min_confidence: 0.6
-  map_aabb:
-    min: [-.inf, -.inf, 0.5]
-    max: [.inf, .inf, 1.65]
+  runtime:
+    base_link_height_above_ground: 0.265
+    range_min: 3.0
+    range_max: 18.0
+    height_min: 0.5
+    height_max: 1.65
+    cluster_tolerance: 0.15
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: true
+  map:
+    aabb:
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.65]
+    range_min: 0.0
+    range_max: .inf
+    cluster_tolerance: 0.15
+    cluster_min_points: 60
+    board_centre_height: 1.3
+    extent_tolerance: [0.8, 1.5]
+    planarity_max_thickness: 0.08
+    verticality_max_dot: 0.25
+    centre_height_tolerance: 0.30
+    density_max_ratio: 1.4
+    density_check_enabled: false
 
 covariance:                   # reflective_pose_ros, the guess covariance
   sigma_xy_base: 0.15
@@ -132,11 +146,17 @@ That is the whole file. It is read by the two things that run the detector:
 `board_detector_node` (parameter `config_file`) and `anchor-map-to-board`
 (`--config`). Nothing else reads it and nothing else is in it.
 
-`detector.map_aabb` is a map-only inclusive crop, evaluated after floor
-levelling in the floor-zero `map_debug` frame. Use `-.inf` for an unbounded
-lower side and `.inf` for an unbounded upper side. The crop filters detector
-input, while floor fitting, viewpoint calculation, and the anchored output
-cloud use the full map. The live detector ignores this field.
+All absolute heights in both policies are measured from physical ground. Runtime
+adds `base_link_height_above_ground` to transformed base-link z only for height
+checks; it does not change the TF used for range or pose. This scalar assumes
+base-link z is aligned with gravity; a vehicle with meaningful roll/pitch needs
+a gravity-aligned height frame. Map points are
+levelled with floor at z=0, and the required `detector.map.aabb` is the explicit
+map crop and sole map point-Z filter; the separate map range gate defaults to
+unbounded. Use `-.inf`/`.inf` for unbounded sides; null or omission is invalid.
+`board.pose_in_map[2]` is an output-map coordinate, independent of the two
+policy `board_centre_height` values, though it should normally match the map
+policy when output-map ground is z=0.
 
 **Revised 2026-09-10: one file per reader.** The first cut of this design put
 the ROS wiring (`ros:`), the Autoware handoff policy (`autoware:`) and the

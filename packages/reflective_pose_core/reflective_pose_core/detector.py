@@ -104,6 +104,8 @@ class DetectorParams:
     # then fails to connect to the rest, and the cluster loses its lower third.
     range_min: float = 3.0
     range_max: float = 18.0
+    # Absolute heights above ground. ``detect_board`` adds its height_offset to
+    # the transformed z value before applying these point and centre gates.
     height_min: float = 0.4
     height_max: float = 1.8
 
@@ -114,6 +116,7 @@ class DetectorParams:
     # Board geometry
     board_width: float = 0.8
     board_height: float = 1.0
+    # Absolute expected board-centre height above ground.
     board_centre_height: float = 1.075
 
     # Stage 3 gates
@@ -142,14 +145,6 @@ class DetectorParams:
     # so a node accumulating 10 scans and a detector assuming 1 would reject
     # every real board as ten times too dense.
     scan_count: int = 1
-    # Metadata for the height gate's coordinate frame. The transform supplied
-    # to detect_board must map sensor points into this frame.
-    height_reference: str = "base_link"
-
-    # Optional map-only spatial crop. ``detect_board`` does not consume this;
-    # ``anchor_cloud`` applies it to detection input after floor levelling.
-    map_aabb: Optional[Aabb] = None
-
     # Stage 4
     edge_margin_scale: float = 1.5  # multiples of local point spacing
 
@@ -543,6 +538,8 @@ def detect_board(
     intensity: np.ndarray,
     transform_height_frame_sensor: np.ndarray,
     params: Optional[DetectorParams] = None,
+    *,
+    height_offset: float = 0.0,
 ) -> DetectResult:
     """Detect the retroreflective board in one accumulated scan.
 
@@ -552,11 +549,15 @@ def detect_board(
             and 101-255 is reserved for retroreflectors, which is why the
             intensity gate is a sensor contract rather than a tuned threshold.
         transform_height_frame_sensor: 4x4 transform from the sensor frame to
-            the frame used by the height policy. Runtime callers pass
-            ``base_link <- sensor``. Map callers pass identity only after the
-            cloud has been gravity-levelled and translated so its fitted floor
-            is z=0.
+            the frame used by the height policy. Runtime callers pass the real
+            ``base_link <- sensor`` TF. Map callers pass identity only after
+            the cloud has been gravity-levelled and translated so its fitted
+            floor is z=0.
         params: thresholds; defaults are the shipped configuration.
+        height_offset: additive offset from the transform's z datum to ground,
+            in metres. Runtime uses the measured base-link height above ground;
+            map mode uses zero. It affects only point and candidate height
+            gates, never range, viewpoint, or the returned pose.
 
     Returns:
         A DetectResult. ``status`` is AMBIGUOUS when more than one cluster
@@ -573,19 +574,23 @@ def detect_board(
     if len(points) != len(intensity):
         raise ValueError("points and intensity must have the same length")
 
+    height_offset = float(height_offset)
+    if not np.isfinite(height_offset):
+        raise ValueError("height_offset must be finite")
+
     rotation = transform_height_frame_sensor[:3, :3]
     # Gravity-up expressed in the sensor frame.
     up_world = rotation.T @ np.array([0.0, 0.0, 1.0])
     up_world = up_world / np.linalg.norm(up_world)
 
     def height_of(p: np.ndarray) -> np.ndarray:
-        return (rotation @ p + transform_height_frame_sensor[:3, 3])[..., 2]
+        return (rotation @ p + transform_height_frame_sensor[:3, 3])[..., 2] + height_offset
 
     if len(points) == 0:
         return DetectResult(Status.NO_CANDIDATE)
 
     ranges = np.linalg.norm(points, axis=1)
-    heights = _transform_points(points, transform_height_frame_sensor)[:, 2]
+    heights = _transform_points(points, transform_height_frame_sensor)[:, 2] + height_offset
 
     keep = intensity >= params.intensity_threshold
     keep &= (ranges >= params.range_min) & (ranges <= params.range_max)

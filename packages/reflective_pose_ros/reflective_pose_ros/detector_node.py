@@ -149,10 +149,15 @@ class BoardDetectorNode(Node):
         self._params = declare_node_params(self)
 
         self._config = load_config(path, scan_count=self._params.accumulate_scans)
-        self._detector_params = self._config.detector
+        self._detector_params = self._config.runtime_detector
+        # Runtime detector heights are ground-relative. Keep the base_link <-
+        # sensor transform untouched and add this offset only in height gates.
+        self._runtime_height_offset = float(
+            self._config.detector.runtime.base_link_height_above_ground
+        )
         # The gate on what gets published. Part of the detector file, beside
         # the gates that decide what counts as a candidate at all.
-        self._min_confidence = float(self._config.detector.min_confidence)
+        self._min_confidence = float(self._detector_params.min_confidence)
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
         self._accumulate_scans = int(self._params.accumulate_scans)
@@ -350,7 +355,11 @@ class BoardDetectorNode(Node):
     def _attempt_detection(self, points, intensity, frame_id: str):
         self._attempts += 1
         result = detect_board(
-            points, intensity, self._transform_base_sensor, self._detector_params
+            points,
+            intensity,
+            self._transform_base_sensor,
+            self._detector_params,
+            height_offset=self._runtime_height_offset,
         )
         self._publish_clusters(result, frame_id)
         self._publish_outline(result, frame_id)

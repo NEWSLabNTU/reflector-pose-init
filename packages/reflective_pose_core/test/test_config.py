@@ -1,18 +1,4 @@
-"""The detector file: one YAML, read by the detector node and the anchoring tool.
-
-Three sections -- ``board``, ``detector``, ``covariance`` -- and nothing else.
-The file used to carry the ROS wiring, the Autoware handoff policy and the
-floor-fit knobs too, so that one document was read by three kinds of consumer;
-those moved to where each consumer already keeps its settings (ROS parameters
-and CLI flags). A file from that layout must fail loudly and say where each
-section went, because a section that is silently ignored reads exactly like
-one whose values took effect.
-
-``board:`` is still fanned out: ``DetectorParams`` carries its own copy of the
-board geometry, and ``anchor_params`` builds ``AnchorParams`` from the same
-numbers, so the runtime guess and the map it is checked against cannot
-disagree.
-"""
+"""The detector file's shared board and split mode-policy contract."""
 
 import pytest
 import yaml
@@ -27,38 +13,117 @@ from reflective_pose_core.config import (
 from reflective_pose_core.detector import Aabb, DetectorParams
 
 
-def write_config(path, pose):
+def write_config(path, pose="[12.0, -4.0, 1.6, 0.0, 0.0, 1.57079632679]", aabb=None):
+    if aabb is None:
+        aabb = (("-.inf", "-.inf", 0.5), (".inf", ".inf", 1.65))
+    minimum, maximum = aabb
     path.write_text(
         f"""board:
   pose_in_map: {pose}
   width: 0.6
   height: 0.6
-  centre_height: 1.6
 
 detector:
   intensity_threshold: 110.0
+  runtime:
+    base_link_height_above_ground: 0.265
+    board_centre_height: 1.6
+    height_min: 0.5
+    height_max: 1.65
+  map:
+    board_centre_height: 1.6
+    aabb:
+      min: [{', '.join(str(value) for value in minimum)}]
+      max: [{', '.join(str(value) for value in maximum)}]
 """,
         encoding="utf-8",
     )
 
 
-def test_board_section_fans_out_to_the_detector(tmp_path):
+def test_runtime_and_map_policies_are_resolved_independently(tmp_path):
     config_file = tmp_path / "detector.yaml"
-    write_config(config_file, "[12.0, -4.0, 1.6, 0.0, 0.0, 1.57079632679]")
+    write_config(config_file)
+
+    config = load_config(str(config_file), scan_count=3)
+    runtime = config.runtime_detector
+    mapped = config.map_detector
+
+    assert config.board.pose_in_map[2] == 1.6
+    assert runtime.board_width == mapped.board_width == config.board.width == 0.6
+    assert runtime.board_height == mapped.board_height == config.board.height == 0.6
+    assert runtime.board_centre_height == mapped.board_centre_height == 1.6
+    assert runtime.height_min == 0.5
+    assert runtime.height_max == 1.65
+    assert mapped.height_min == float("-inf")
+    assert mapped.height_max == float("inf")
+    assert runtime.scan_count == 3
+    assert mapped.scan_count == 1
+    assert config.detector.runtime.base_link_height_above_ground == 0.265
+    assert config.detector.map.aabb == Aabb(
+        (None, None, 0.5), (None, None, 1.65)
+    )
+
+
+def test_runtime_and_map_gate_values_do_not_leak(tmp_path):
+    config_file = tmp_path / "profiles.yaml"
+    config_file.write_text(
+        """board:
+  pose_in_map: [0.0, 0.0, 1.3, 0.0, 0.0, 0.0]
+  width: 0.6
+  height: 0.97
+
+detector:
+  runtime:
+    cluster_tolerance: 0.30
+    cluster_min_points: 20
+    planarity_max_thickness: 0.04
+    board_centre_height: 1.035
+  map:
+    cluster_tolerance: 0.05
+    cluster_min_points: 60
+    planarity_max_thickness: 0.08
+    board_centre_height: 1.0
+    aabb:
+      min: [-.inf, -.inf, 0.8]
+      max: [.inf, .inf, 1.2]
+""",
+        encoding="utf-8",
+    )
 
     config = load_config(str(config_file))
+    runtime = config.runtime_detector
+    mapped = config.map_detector
 
-    assert config.board.pose_in_map == (12.0, -4.0, 1.6, 0.0, 0.0, 1.57079632679)
-    assert config.board.width == config.detector.board_width == 0.6
-    assert config.board.height == config.detector.board_height == 0.6
-    assert config.board.centre_height == config.detector.board_centre_height == 1.6
-    assert config.detector.intensity_threshold == 110.0
+    assert runtime.cluster_tolerance == 0.30
+    assert mapped.cluster_tolerance == 0.05
+    assert runtime.cluster_min_points == 20
+    assert mapped.cluster_min_points == 60
+    assert runtime.planarity_max_thickness == 0.04
+    assert mapped.planarity_max_thickness == 0.08
+    assert runtime.board_centre_height == 1.035
+    assert mapped.board_centre_height == 1.0
+    assert config.detector.map_aabb == Aabb(
+        (None, None, 0.8), (None, None, 1.2)
+    )
 
 
-def test_anchor_params_share_the_board_and_take_floor_fit_overrides(tmp_path):
-    """The anchoring tool's inputs: the file's board, the caller's floor fit."""
+@pytest.mark.parametrize("offset", ["-0.01", ".inf"])
+def test_runtime_height_offset_must_be_finite_and_non_negative(tmp_path, offset):
+    config_file = tmp_path / "invalid_offset.yaml"
+    write_config(config_file)
+    document = config_file.read_text(encoding="utf-8").replace(
+        "base_link_height_above_ground: 0.265",
+        f"base_link_height_above_ground: {offset}",
+    )
+    config_file.write_text(document, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="finite non-negative"):
+        load_config(str(config_file))
+
+
+def test_anchor_params_share_only_board_shape_and_pose(tmp_path):
     config_file = tmp_path / "detector.yaml"
-    write_config(config_file, "[12.0, -4.0, 1.6, 0.0, 0.0, 1.57079632679]")
+    write_config(config_file)
     config = load_config(str(config_file))
 
     params = anchor_params(config, floor_band=0.5, max_floor_tilt_deg=2.0)
@@ -66,56 +131,41 @@ def test_anchor_params_share_the_board_and_take_floor_fit_overrides(tmp_path):
     assert params.board_pose_in_map == config.board.pose_in_map
     assert params.board_width == config.board.width
     assert params.board_height == config.board.height
-    assert params.board_centre_height == config.board.centre_height
+    assert not hasattr(params, "board_centre_height")
     assert params.floor_band == 0.5
     assert params.max_floor_tilt_deg == 2.0
-    # An override that is not a floor-fit knob is a mistake, not a feature.
     with pytest.raises(TypeError):
         anchor_params(config, board_width=1.0)
 
 
-def test_omitted_sections_fall_back_to_the_dataclass_defaults(tmp_path):
-    """A file may set only what it changes; the rest is the code's default."""
-    config_file = tmp_path / "sparse.yaml"
-    config_file.write_text("detector:\n  range_max: 25.0\n", encoding="utf-8")
+def test_map_aabb_is_required(tmp_path):
+    config_file = tmp_path / "missing_aabb.yaml"
+    config_file.write_text("detector:\n  runtime:\n    height_min: 0.5\n", encoding="utf-8")
 
-    config = load_config(str(config_file))
-
-    assert config.detector.range_max == 25.0
-    assert config.covariance.sigma_z == 0.10
-    # Still fanned out, from the board defaults rather than from the file.
-    assert config.detector.board_width == config.board.width
+    with pytest.raises(ValueError, match="aabb is required"):
+        load_config(str(config_file))
 
 
-def test_scan_count_is_injected_by_the_caller(tmp_path):
-    """The expected return count scales with how many scans the node stacks.
+@pytest.mark.parametrize(
+    "document, message",
+    [
+        ("detector:\n  map:\n    aabb: null\n", "cannot be null"),
+        (
+            "detector:\n  map:\n    aabb:\n      min: [null, -.inf, 0]\n      max: [.inf, .inf, 1]\n",
+            "null AABB bounds",
+        ),
+        ("detector:\n  map:\n    height_min: 0.5\n", "runtime-only"),
+        ("detector:\n  map_aabb: null\n", "unknown key"),
+    ],
+)
+def test_load_config_rejects_ambiguous_or_legacy_map_settings(
+    tmp_path, document, message
+):
+    config_file = tmp_path / "invalid.yaml"
+    config_file.write_text(document, encoding="utf-8")
 
-    The node is the one thing that knows that number, so it passes it in; the
-    file no longer carries a ``ros:`` section to read it from.
-    """
-    config_file = tmp_path / "detector.yaml"
-    config_file.write_text("detector:\n  range_max: 25.0\n", encoding="utf-8")
-
-    assert load_config(str(config_file), scan_count=3).detector.scan_count == 3
-    assert load_config(str(config_file)).detector.scan_count == 1
-
-
-def test_map_aabb_normalizes_signed_infinity_bounds(tmp_path):
-    config_file = tmp_path / "map_aabb.yaml"
-    config_file.write_text(
-        """detector:
-  map_aabb:
-    min: [-.inf, -2.0, 0.5]
-    max: [.inf, 3.0, 1.65]
-""",
-        encoding="utf-8",
-    )
-
-    config = load_config(str(config_file))
-
-    assert config.detector.map_aabb == Aabb(
-        (None, -2.0, 0.5), (None, 3.0, 1.65)
-    )
+    with pytest.raises(ValueError, match=message):
+        load_config(str(config_file))
 
 
 @pytest.mark.parametrize(
@@ -131,11 +181,37 @@ def test_map_aabb_normalizes_signed_infinity_bounds(tmp_path):
 def test_map_aabb_rejects_invalid_bounds(tmp_path, aabb, message):
     config_file = tmp_path / "invalid_aabb.yaml"
     config_file.write_text(
-        f"detector:\n  map_aabb: {aabb}\n", encoding="utf-8"
+        f"detector:\n  map:\n    aabb: {aabb}\n", encoding="utf-8"
     )
 
     with pytest.raises(ValueError, match=message):
         load_config(str(config_file))
+
+
+def test_flat_gate_keys_are_rejected_even_when_map_aabb_is_present(tmp_path):
+    config_file = tmp_path / "sparse.yaml"
+    config_file.write_text(
+        """detector:
+  range_max: 25.0
+  map:
+    aabb:
+      min: [-.inf, -.inf, -.inf]
+      max: [.inf, .inf, .inf]
+""",
+        encoding="utf-8",
+    )
+
+    # range_max is no longer a flat detector key: a typo/old layout fails.
+    with pytest.raises(ValueError, match="unknown key"):
+        load_config(str(config_file))
+
+
+def test_scan_count_is_injected_by_the_runtime_caller(tmp_path):
+    config_file = tmp_path / "scan_count.yaml"
+    write_config(config_file)
+
+    assert load_config(str(config_file), scan_count=3).runtime_detector.scan_count == 3
+    assert load_config(str(config_file)).runtime_detector.scan_count == 1
 
 
 @pytest.mark.parametrize(
@@ -147,7 +223,6 @@ def test_map_aabb_rejects_invalid_bounds(tmp_path, aabb, message):
     ],
 )
 def test_sections_that_moved_are_rejected_by_name(tmp_path, section, moved_to):
-    """A file from the six-section layout must say where each section went."""
     config_file = tmp_path / "old_layout.yaml"
     config_file.write_text(f"{section}:\n  some_key: 1\n", encoding="utf-8")
 
@@ -161,7 +236,12 @@ def test_sections_that_moved_are_rejected_by_name(tmp_path, section, moved_to):
         ("- not a mapping\n", "expected a mapping"),
         ("bord:\n  width: 0.6\n", "unknown section"),
         ("board:\n  widht: 0.6\n", "unknown key"),
-        ("detector:\n  intensity_thresold: 240.0\n", "unknown key"),
+        ("board:\n  centre_height: 1.3\n", "unknown key"),
+        ("detector:\n  height_reference: base_link\n", "unknown key"),
+        (
+            "detector:\n  runtime:\n    height_reference: map_floor\n",
+            "unknown key",
+        ),
         ("board:\n  pose_in_map: [0, 0, 1, 0, 0, 0, 1]\n", "pose_in_map must"),
         ("board:\n  pose_in_map: 1.0\n", "pose_in_map must"),
     ],
@@ -180,56 +260,56 @@ def test_default_config_path_prefers_the_environment_override(tmp_path, monkeypa
     monkeypatch.setenv(CONFIG_ENV_VAR, str(override))
 
     assert default_config_path() == str(override)
-    assert load_config().board.centre_height == 1.6
+    assert load_config().board.pose_in_map[2] == 1.3
 
 
 def test_default_config_path_falls_back_to_the_packaged_file(monkeypatch):
-    """With no override, the default file ships inside the package."""
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
 
     resolved = default_config_path()
 
     assert resolved.endswith("reflective_pose_core/data/detector.yaml")
-    # It is a real file, and it loads: the packaged default must always work.
     assert load_config().detector.intensity_threshold == 100.0
 
 
 def test_packaged_defaults_are_the_decided_values(monkeypatch):
-    """The 2026-09-10 decisions: 0.6 x 0.6 m board, centre 1.3 m, threshold 100.
-
-    100 is the bottom of the VLP-32C's datasheet retroreflector band -- a
-    sensor contract that is reachable, where the previous 240 was not: no
-    scan in the replay bag cleared cluster_min_points at 240.
-    """
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
 
-    config = load_config()
+    config = load_config(scan_count=10)
 
     assert config.board.width == 0.6
     assert config.board.height == 0.6
-    assert config.board.centre_height == 1.3
     assert config.board.pose_in_map == (0.0, 0.0, 1.3, 0.0, 0.0, 0.0)
     assert config.detector.intensity_threshold == 100.0
+    assert config.detector.runtime.base_link_height_above_ground == 0.265
+    assert config.runtime_detector.board_centre_height == 1.3
+    assert config.map_detector.board_centre_height == 1.3
+    assert config.map_detector.height_min == float("-inf")
+    assert config.map_detector.height_max == float("inf")
 
 
 def test_board_dataclass_defaults_agree_with_the_packaged_file(monkeypatch):
-    """A file that omits ``board:`` must describe the same board as the packaged one."""
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
 
-    packaged = load_config().board
-
-    assert BoardParams() == packaged
+    assert BoardParams() == load_config().board
 
 
-def test_min_confidence_is_a_detector_key(tmp_path, monkeypatch):
-    """The gate on what gets published lives beside the gates on what counts."""
-    config_file = tmp_path / "detector.yaml"
-    config_file.write_text("detector:\n  min_confidence: 0.9\n", encoding="utf-8")
-    assert load_config(str(config_file)).detector.min_confidence == 0.9
+def test_min_confidence_is_a_shared_detector_key(tmp_path, monkeypatch):
+    config_file = tmp_path / "confidence.yaml"
+    config_file.write_text(
+        """detector:
+  min_confidence: 0.9
+  map:
+    aabb:
+      min: [-.inf, -.inf, -.inf]
+      max: [.inf, .inf, .inf]
+""",
+        encoding="utf-8",
+    )
 
-    # The packaged file names it explicitly, with its reasoning, rather than
-    # inheriting the dataclass default silently.
+    assert load_config(str(config_file)).runtime_detector.min_confidence == 0.9
+
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
     document = yaml.safe_load(open(default_config_path(), encoding="utf-8"))
     assert "min_confidence" in document["detector"]
-    assert load_config().detector.min_confidence == DetectorParams().min_confidence
+    assert load_config().runtime_detector.min_confidence == DetectorParams().min_confidence

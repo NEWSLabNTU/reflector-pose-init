@@ -9,12 +9,14 @@ One file per reader.
 | `board_pose_initializer.param.yaml` | `board_pose_initializer`, as ROS parameters | the Autoware handoff policy |
 | flags of `anchor-map-to-board` | the tool | the floor fit |
 
-The detector file is the one that matters for correctness: the map is anchored
-offline against the same board block the runtime node looks for, so the two
-cannot drift apart through a launch override. The other settings describe
-where each node is plugged in, and arrive the way every other ROS node takes
-such things. The input cloud is neither: `board_detector_node` subscribes to
-`~/input/pointcloud`, and the launch file remaps it.
+The detector file is the one that matters for correctness: it keeps shared
+sensor settings together while giving runtime detection and offline map
+anchoring separate policies. The two modes do not see equivalent clouds:
+runtime points are a sensor view in `base_link`, while map points are a merged,
+floor-levelled cloud. The other settings describe where each node is plugged
+in, and arrive the way every other ROS node takes such things. The input cloud
+is neither: `board_detector_node` subscribes to `~/input/pointcloud`, and the
+launch file remaps it.
 
 Packaged defaults:
 
@@ -47,9 +49,11 @@ Three sections.
 | `detector` | detection gates |
 | `covariance` | the guess covariance published with the pose |
 
-`board.width`, `board.height` and `board.centre_height` are written once and
-fanned out to the detector and, through `anchor_params()`, to the anchoring
-tool. The runtime pose guess and the map it is checked against cannot disagree.
+`board.width` and `board.height` are shared geometry. `board.pose_in_map` is the
+board's target pose in the output map; its `z` value is a map coordinate, not a
+detector height-policy setting. The runtime and map policies each have their
+own ground-relative `board_centre_height`, because each path has its own
+height datum and tuning.
 
 `detector.scan_count` is not in the file. The node passes its own
 `accumulate_scans` to the loader, because the expected return count scales with
@@ -64,62 +68,109 @@ tool leaves it at one.
 | `pose_in_map` | `[0, 0, 1.3, 0, 0, 0]` | `[x, y, z, roll, pitch, yaw]`, radians, rotation `Rz(yaw) @ Ry(pitch) @ Rx(roll)` |
 | `width` | `0.6` | reflective face width, metres |
 | `height` | `0.6` | reflective face height, metres |
-| `centre_height` | `1.3` | expected centre height above the local floor, metres |
 
-`centre_height` and `pose_in_map[2]` are different things: the first is the
-physical mounting height the detector expects, the second is a map coordinate.
-Keep them equal for a floor-level map; differ deliberately only when the map
-frame carries an offset.
+`pose_in_map[2]` is the board's target `z` in the map produced by anchoring. It
+is independent from both detector policies' expected board centre heights.
+With a correctly floor-levelled map (`z=0` at ground), it should normally agree
+numerically with `detector.map.board_centre_height`, but the loader does not
+derive either value from the other.
 
 ### detector
+
+The top level contains settings shared by both policies:
 
 | Key | Default | Meaning |
 |---|---|---|
 | `intensity_threshold` | `100.0` | retroreflector band cutoff |
+| `azimuth_step_rad` | `0.0035` | sensor azimuth resolution, radians |
+| `mean_elevation_step_rad` | `0.0225` | sensor elevation step used by the density model, radians |
+| `min_confidence` | `0.6` | below this, a surviving runtime cluster is not published |
+
+The policy-specific gates are independent. Matching defaults do not make the
+two clouds share a hidden flat parameter set.
+
+### detector.runtime
+
+Runtime heights are ground-relative even though the input points and the TF
+transform are expressed relative to `base_link`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_link_height_above_ground` | `0.265` | added to transformed `base_link` z only for height checks |
 | `range_min` / `range_max` | `3.0` / `18.0` | usable range, metres |
-| `height_min` / `height_max` | `0.5` / `1.65` | band of point heights above `base_link` kept before clustering |
+| `height_min` / `height_max` | `0.5` / `1.65` | ground-relative point-height band, metres |
 | `cluster_tolerance` | `0.15` | clustering distance, metres |
 | `cluster_min_points` | `60` | smallest cluster considered |
+| `board_centre_height` | `1.3` | expected board centre above physical ground, metres |
 | `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
 | `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
 | `verticality_max_dot` | `0.25` | how far off vertical the normal may be |
-| `centre_height_tolerance` | `0.30` | slack on `board.centre_height` |
+| `centre_height_tolerance` | `0.30` | slack on this policy's `board_centre_height` |
 | `density_max_ratio` | `1.4` | upper bound on returns vs expected |
 | `density_check_enabled` | `true` | whether the density gate runs |
-| `azimuth_step_rad` | `0.0035` | 0.2 deg at 600 rpm / 10 Hz |
-| `min_confidence` | `0.6` | below this, a surviving cluster is not published |
-| `map_aabb` | XY unbounded; z `0.5..1.65` | optional inclusive crop used only by map anchoring, in `map_debug` |
 
-The detector applies these gates in order: point intensity/range/height,
-clustering, planarity, verticality, projected extent, centre height, and (when
-enabled) the upper density limit. A cluster that passes all of them is a
-candidate. The ROS node then applies `min_confidence`; the core detector does
-not suppress a geometric survivor based on confidence, so offline and runtime
-diagnostics can show the same measurement.
+The node transforms with the real `base_link <- sensor` TF. It computes
+`height_above_ground = z_base_link + base_link_height_above_ground` for the
+runtime point band and candidate-centre check. The offset does not alter the
+TF, range, viewpoint, density geometry, or returned pose. This scalar assumes
+the `base_link` z axis is aligned with gravity; if roll/pitch is meaningful,
+use a gravity-aligned height frame instead of a scalar offset.
 
-`height_min` and `height_max` are point gates. Runtime callers measure them
-after transforming points into `base_link`; map anchoring measures them after
-floor levelling and uses the floor-zero `map_debug` frame. `verticality_max_dot`
-means `abs(normal · up) <= limit`, so a vertical board has a value near zero.
+### detector.map
+
+Map points are gravity-levelled and translated so the fitted physical ground is
+`z=0`. The required AABB is the explicit map spatial crop and sole point-height
+filter; the separate map range gate defaults to unbounded. Map mode has no
+`height_min` or `height_max` keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `aabb` | required | inclusive crop in the levelled, floor-zero `map_debug` frame; its z slab is the map point-height filter |
+| `range_min` / `range_max` | `0.0` / `.inf` | map range policy, metres |
+| `cluster_tolerance` | `0.15` | clustering distance, metres |
+| `cluster_min_points` | `60` | smallest cluster considered |
+| `board_centre_height` | `1.3` | expected board centre above physical ground, metres |
+| `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
+| `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
+| `verticality_max_dot` | `0.25` | how far off vertical the normal may be |
+| `centre_height_tolerance` | `0.30` | slack on this policy's `board_centre_height` |
+| `density_max_ratio` | `1.4` | upper bound on returns vs expected |
+| `density_check_enabled` | `false` | whether the density gate runs |
+
+The runtime detector applies intensity, range and ground-relative height point
+gates before clustering. Map anchoring applies `detector.map.aabb` first, then
+the map policy's intensity/range gates; its resolved detector height bounds are
+unbounded. Both modes then apply clustering, planarity, verticality, projected
+extent, candidate centre height, and the policy's density setting. A cluster
+that passes all of them is a candidate. The ROS node then applies
+`min_confidence`; the core detector does not suppress a geometric survivor
+based on confidence.
+
+`verticality_max_dot` means `abs(normal · up) <= limit`, so a vertical board has
+a value near zero. `board_centre_height` in either policy is ground-relative;
+it is a candidate-level plausibility check, not a second map point crop.
 
 #### Map AABB
 
-`map_aabb` is applied only by `anchor-map-to-board`, after floor levelling and
-before the detector receives its map points. Bounds are inclusive. Use signed
-infinity as the canonical YAML spelling for open sides:
+`detector.map.aabb` is required and is applied only by `anchor-map-to-board`,
+after floor levelling and before the detector receives its map points. Bounds
+are inclusive. Use signed infinity as the canonical YAML spelling for open
+sides:
 
 ```yaml
 detector:
-  map_aabb:
-    min: [-.inf, -.inf, 0.5]
-    max: [.inf, .inf, 1.65]
+  map:
+    aabb:
+      min: [-.inf, -.inf, 0.5]
+      max: [.inf, .inf, 1.65]
 ```
 
 Use `-.inf` for an unbounded lower bound and `.inf` for an unbounded upper
-bound. Do not use `null` for an individual coordinate. Omit `map_aabb` to
-disable the crop; `map_aabb: null` disables the whole optional crop and is a
-compatibility spelling, not an unbounded side. Floor fitting, viewpoint
-calculation, and the anchored output cloud always use the full input map.
+bound. Do not use `null`, and do not omit `detector.map.aabb`; an AABB with
+unbounded sides is written explicitly with signed infinities. Null or omitted
+bounds are rejected. The AABB is the sole map spatial/Z input filter. Floor
+fitting, viewpoint calculation, and the anchored output cloud always use the
+full input map.
 
 Most of these are measurements rather than tunings, and the comments in the
 YAML say so:
@@ -132,14 +183,17 @@ YAML say so:
   is beside the key. The cost is that everything retroreflective now passes
   this gate, and the geometry, the confidence gate and a non-terminal
   `AMBIGUOUS` are what sort it.
-- **`cluster_tolerance: 0.15`** and **`height_max: 1.65`** — measured together
+- **`detector.runtime.cluster_tolerance: 0.15`** and
+  **`detector.runtime.height_max: 1.65`** — measured together
   on the replay bag. The board sits 0.66 m below the cart's sensor, in the
   part of the fan where ring spacing is 0.1 m at 5 m and more below 4 m; at
   the old 0.05 it split into ring stripes in every one of 235 batches, and
   0.10 still lost a ring at 3 m. 0.15 bridges the rings but also the 0.1 m
   gap to a second retroreflective band directly above the board (top at
   1.6 m, band 1.7 to 1.9 m), which merged into the cluster in 2 of 9 batches
-  and lifted the centre 6 to 9 cm; `height_max: 1.65` keeps that band out.
+  and lifted the centre 6 to 9 cm; `detector.runtime.height_max: 1.65` keeps
+  that band out. The equivalent map Z filtering belongs in the z bounds of
+  `detector.map.aabb`.
   The old 1.5 clipped the top 0.1 m of the board itself.
 - **`range_min: 3.0`** — below 3 m the board falls into the sparse lower
   elevation band, where the 9.4 degree gap between the -25.0 and -15.6 degree

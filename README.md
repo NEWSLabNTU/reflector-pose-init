@@ -132,9 +132,26 @@ Autoware handoff policy — is ordinary ROS parameters, shipped as
 `board_detector.param.yaml` and `board_pose_initializer.param.yaml`. The
 anchoring tool's floor-fit knobs are its own flags.
 
-For a large map, `detector.map_aabb` is an optional inclusive crop in the
-levelled, floor-zero `map_debug` frame. Use `-.inf` for an unbounded lower side
-and `.inf` for an unbounded upper side; the crop affects detection input only.
+The detector file keeps shared sensor settings at `detector`, then separates
+the independent `detector.runtime` and `detector.map` policies. Runtime
+`height_min`/`height_max` are absolute heights above physical ground. Runtime
+points are transformed with the real `base_link <- sensor` TF, then
+`detector.runtime.base_link_height_above_ground` is added only for point and
+candidate height checks; the TF itself remains unchanged for range, viewpoint,
+and pose calculations.
+
+Map clouds are floor-levelled with ground at `z=0`. Map mode has no
+`height_min`/`height_max`: the required `detector.map.aabb` is the explicit
+spatial crop and sole point-Z filter; the map range gate is separate and
+defaults to unbounded. Bounds are inclusive. Use `-.inf` for an unbounded lower
+side and `.inf` for an unbounded upper side. Null or omitted bounds are invalid.
+
+`board.pose_in_map[2]` is the board's target coordinate in the output map.
+`detector.runtime.board_centre_height` and
+`detector.map.board_centre_height` are independent ground-relative candidate
+height policies; they are not aliases for the board map pose. Keep the map
+policy value aligned with the physical board height, and keep
+`pose_in_map[2]` aligned with the map's surveyed target.
 
 **Set `twist_topic` before running on a vehicle.** Stacking scans assumes a
 stationary sensor; without a motion source the detector cannot tell and will

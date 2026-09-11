@@ -50,13 +50,13 @@ what the old ``~/debug/map_cloud`` topic carried.
 
 Counts, as the old stderr summary printed them
 ----------------------------------------------
-``aabb_enabled``       () bool — whether the map-only crop was applied
-``aabb_frame``         () unicode — always ``"map_debug"`` when enabled
-``aabb_min``           (3,) float64 — inclusive lower bound, NaN when disabled
-                        or unbounded on an axis
-``aabb_max``           (3,) float64 — inclusive upper bound, NaN when disabled
-                        or unbounded on an axis
-``n_inside_aabb``      () int32 — points inside the AABB, or all points when disabled
+``aabb_enabled``       () bool — always true; the map AABB is required
+``aabb_frame``         () unicode — always ``"map_debug"``
+``aabb_min``           (3,) float64 — inclusive lower bound, NaN when unbounded
+                        on an axis
+``aabb_max``           (3,) float64 — inclusive upper bound, NaN when unbounded
+                        on an axis
+``n_inside_aabb``      () int32 — points inside the required AABB
 ``n_after_gates``       () int32 — points passing the AABB (when enabled) and
                         intensity/range/height
 ``n_clusters``          () int32 — clusters formed
@@ -122,9 +122,8 @@ only the centroid label. Nothing the old picture contained is lost.
 
 The gates that produced those verdicts
 --------------------------------------
-``param_names``         (T,) unicode — every numeric scalar of the
-                        ``DetectorParams`` this run used, **after**
-                        ``detector_params_for_map`` relaxed range and density
+``param_names``         (T,) unicode — every numeric scalar of the resolved map
+                        ``DetectorParams`` this run used
 ``param_values``        (T,) float64 — parallel to ``param_names``. Booleans are
                         0.0 / 1.0; ``range_max`` is ``inf`` for a map cloud.
 
@@ -468,9 +467,8 @@ def write_debug_dump(
     failure path — which is the path the picture is wanted on.
     """
     result = captured["result"]
-    # The gates the detector actually ran with: anchoring relaxes range and
-    # density for a merged cloud, so dumping the file's values would show a
-    # viewer limits that were never applied.
+    # The gates the detector actually ran with: this is the resolved map policy,
+    # including its explicit range and density settings.
     params = detector_params_for_map(detector_params)
 
     names, values = _numeric_params(params)
@@ -552,8 +550,8 @@ def main(argv=None) -> int:
         floor_refits=args.floor_refits,
         max_floor_tilt_deg=args.max_floor_tilt_deg,
     )
-    detector_params = config.detector
-    aabb = detector_params.map_aabb
+    detector_params = config.map_detector
+    aabb = config.detector.map_aabb
 
     cloud = read_cloud(args.cloud)
     print(f"read {len(cloud)} points from {args.cloud}")

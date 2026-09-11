@@ -15,9 +15,10 @@ show the points and the reason each cluster was rejected.
 - Use [map anchoring](map-anchoring.md) for a merged map; its debug dump and
   viewer are separate from the live detector topics.
 
-Do not tune runtime and map settings interchangeably. Runtime heights are in
-`base_link`; map AABB bounds and the map candidate-height gate after levelling
-are in the floor-zero `map_debug` frame.
+Do not tune runtime and map settings interchangeably. Runtime point and
+candidate heights are ground-relative, computed as
+`z_base_link + detector.runtime.base_link_height_above_ground`. Map AABB bounds
+and map candidate heights are in the floor-zero `map_debug` frame.
 
 ## Inspect a live detector
 
@@ -87,8 +88,8 @@ viewpoint calculation, and the output cloud use the full input map.
 |---|---|---|
 | No pose and `wait_tf` | The detector cannot transform sensor points | `sensor_frame`, `base_frame`, and static TF |
 | No pose and `accumulate` | Too few scans or no candidate yet | input topic, `accumulate_scans`, intensity, runtime gates |
-| `no candidate` | Reflective clusters failed a gate | rejection reason, height frame, extents, planarity, board dimensions |
-| `AMBIGUOUS` | Multiple board-shaped clusters survived | signs/reflectors in view, map AABB, XY crop, geometry gates |
+| `no candidate` | Reflective clusters failed a gate | rejection reason, runtime ground offset or map AABB, extents, planarity, board dimensions |
+| `AMBIGUOUS` | Multiple board-shaped clusters survived | signs/reflectors in view, required map AABB, XY crop, geometry gates |
 | `no points inside map AABB` | The crop misses the leveled cloud | inspect `map_debug` coordinates and use `-.inf`/`.inf` for unbounded lower/upper sides |
 | Floor fit tilted too far | The lowest points do not describe the floor | floor band/percentile, map export, multiple floor levels |
 | Board found but wrong pose | Shared map contract or orientation is wrong | `board.pose_in_map`, board dimensions, anchored map, viewpoint |
@@ -97,8 +98,9 @@ viewpoint calculation, and the output cloud use the full input map.
 
 Each rejected cluster gets one label at its centroid. The label contains the
 first geometry gate that rejected that cluster and, when available, the
-measured value. Compare that value with the resolved detector configuration
-for the run; map anchoring relaxes only its range and density gates.
+measured value. Compare that value with the resolved runtime or map policy for
+the run. Runtime and map gates are resolved separately; map anchoring has its
+own range and density settings.
 
 | Reason | Label measurement | Meaning | Check first |
 |---|---|---|---|
@@ -107,7 +109,7 @@ for the run; map anchoring relaxes only its range and density gates.
 | `degenerate_up` | no measurement | The fitted normal leaves no usable gravity-up direction in the board plane | degenerate or nearly horizontal geometry and the preceding verticality setting |
 | `bad_width` | `X m` | Projected width is outside `extent_tolerance * board.width` | reflective-face width, occlusion, cluster splitting/merging |
 | `bad_height` | `X m` | Projected height is outside `extent_tolerance * board.height` | reflective-face height, vertical occlusion, height filtering |
-| `bad_mount_height` | `X m` | The cluster centroid height is outside `board_centre_height ± centre_height_tolerance` | height frame, floor datum, derived centre height |
+| `bad_mount_height` | `X m` | The cluster centroid height above ground is outside the active policy's `board_centre_height ± centre_height_tolerance` | runtime base-link offset, map floor fit, policy centre height |
 | `too_dense` | `ratio X` | The cluster has more points than `density_max_ratio` times the sensor-model expectation | accumulated scan count, motion, merged clusters, density setting |
 
 For example, with a `0.6 m` board and `extent_tolerance: [0.8, 1.5]`, a
@@ -123,9 +125,8 @@ already failed an earlier gate.
 
 For offline map runs, `--dump-debug` also stores the resolved map parameters,
 the measured rejection value, and the accepted lower/upper limits in the NPZ
-debug file. The dump records the parameters that actually ran after map
-anchoring relaxed range and density, so do not compare its rejection against
-the raw YAML values for those two gates.
+debug file. Compare its rejection against the map YAML values rather than the
+runtime policy; the two policies are resolved independently.
 
 ## Tune in a safe order
 

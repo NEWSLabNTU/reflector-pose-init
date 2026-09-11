@@ -47,20 +47,21 @@ deployment map.
 
 ## Restrict the map search
 
-For a large map, add the optional `detector.map_aabb` crop to the same detector
-file:
+The detector file requires a map AABB. For a large map, narrow its inclusive
+crop in the same detector file:
 
 ```yaml
 detector:
-  map_aabb:
-    min: [-.inf, -5.0, 0.5]
-    max: [12.0, .inf, 1.65]
+  map:
+    aabb:
+      min: [-.inf, -5.0, 0.5]
+      max: [12.0, .inf, 1.65]
 ```
 
 The bounds are inclusive and are evaluated in the floor-levelled,
 floor-zero `map_debug` frame. Use `-.inf` for an unbounded lower side and
-`.inf` for an unbounded upper side. Do not use `null` for an individual
-coordinate; omit `map_aabb` when the crop is not needed. The crop filters only
+`.inf` for an unbounded upper side. Do not use `null` or omit the AABB; a full
+map search is written explicitly with signed infinities. The crop filters only
 the detector input: floor fitting, viewpoint calculation, and the output map
 still use the complete cloud. The live detector ignores this map-only setting.
 
@@ -122,9 +123,11 @@ separate viewer rather than inline.
   `[x, y, z, roll, pitch, yaw]`, angles in radians, rotation
   `Rz(yaw) @ Ry(pitch) @ Rx(roll)`.
 - `map_projector_info.yaml` must use `projector_type: Local`.
-- `board.centre_height` and `board.pose_in_map[2]` are different quantities: the
-  physical mounting height above the floor, and a map coordinate. Keep them
-  equal for a floor-level map.
+- `detector.runtime.board_centre_height` and
+  `detector.map.board_centre_height` are ground-relative candidate-height
+  policies. `board.pose_in_map[2]` is the target coordinate in the output map;
+  it is independent, but should normally match the map policy height when the
+  output map has ground at z=0.
 - Moving the board, changing its face dimensions, or rebuilding the map
   invalidates the old pose. Re-anchor or resurvey, then repeat
   [rosbag validation](rosbag-validation.md).

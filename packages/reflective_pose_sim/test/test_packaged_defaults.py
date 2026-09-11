@@ -51,11 +51,15 @@ def test_packaged_file_detects_the_decided_board(range_m, monkeypatch):
     points, intensity = stacked_scan(scene)
 
     result = detect_board(
-        points, intensity, scenes.transform_base_sensor(SENSOR_HEIGHT), config.detector
+        points,
+        intensity,
+        scenes.transform_base_sensor(SENSOR_HEIGHT - 0.265),
+        config.runtime_detector,
+        height_offset=config.detector.runtime.base_link_height_above_ground,
     )
 
     assert result.status is Status.OK, [
         (r.reason, r.detail) for r in result.rejections
     ]
     assert np.linalg.norm(result.detection.centre - truth[:3, 3]) < 0.15
-    assert result.detection.confidence >= config.detector.min_confidence
+    assert result.detection.confidence >= config.runtime_detector.min_confidence
