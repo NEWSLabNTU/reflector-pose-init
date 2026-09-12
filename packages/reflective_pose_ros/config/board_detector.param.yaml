@@ -12,7 +12,7 @@
     # Feeds the detector's scan_count. The expected return count scales with
     # it, so a node accumulating 10 scans against a detector assuming 1
     # rejects every real board as ten times too dense. Set once, here.
-    accumulate_scans: 10
+    accumulate_scans: 1
 
     # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
     # batch taken while the vehicle rolls is smeared and the board's extents
