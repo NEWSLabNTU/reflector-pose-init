@@ -20,4 +20,9 @@
     # vehicle. nav_msgs/Odometry and geometry_msgs/TwistStamped are both
     # accepted; the node picks by the topic's advertised type.
     twist_topic: ""
+    # The motion source's message type: nav_msgs/msg/Odometry,
+    # geometry_msgs/msg/TwistStamped or geometry_msgs/msg/TwistWithCovarianceStamped.
+    # Empty picks it from the topic's advertised type at startup, which races
+    # with the publisher on a vehicle; name it there.
+    twist_type: ""
     max_speed_for_accumulation: 0.05

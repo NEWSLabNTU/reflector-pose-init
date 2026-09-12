@@ -7,7 +7,10 @@ real OK / AMBIGUOUS / NO_CANDIDATE result rather than a hand-built stand-in.
 from builtin_interfaces.msg import Time
 from visualization_msgs.msg import Marker
 
+import numpy as np
+
 from reflective_pose_ros.debug_viz import (
+    board_outline_marker_array,
     board_pose_stamped,
     detection_points_cloud,
     rejection_marker_array,
@@ -101,3 +104,87 @@ def test_xyzi_cloud_round_trips_point_count():
     cloud = xyzi_cloud(scan.points, scan.intensity, FRAME, STAMP)
     assert cloud.width == len(scan.points)
     assert cloud.header.frame_id == FRAME
+
+
+# -- the detected board's outline ---------------------------------------------
+#
+# Two rectangles in the sensor frame, around the detected centre and in the
+# board plane: `nominal` is the configured board, which is what the published
+# pose is composed from; `measured` is what the sensor actually saw, drawn one
+# edge per marker so an edge the detector did not observe can be told apart --
+# a hidden edge is the one defect that biases the centre.
+
+NOMINAL = (0.6, 0.6)
+
+
+def _in_board_plane(detection, point):
+    """(u, v) of a marker point: along `right` and `up` from the centre."""
+    offset = np.array([point.x, point.y, point.z]) - detection.centre
+    return float(offset @ detection.right), float(offset @ detection.up)
+
+
+def _ok_detection(**scene_kwargs):
+    scene, _ = scenes.board_scene(**scene_kwargs)
+    result = run(scene)
+    assert result.status is Status.OK
+    return result.detection
+
+
+def test_outline_starts_with_clear_all_and_uses_the_given_frame():
+    detection = _ok_detection()
+    markers = board_outline_marker_array(detection, NOMINAL, FRAME, STAMP).markers
+    assert markers[0].action == Marker.DELETEALL
+    assert all(m.header.frame_id == FRAME for m in markers[1:])
+
+
+def test_nominal_outline_is_the_configured_board_around_the_detected_centre():
+    detection = _ok_detection()
+    markers = board_outline_marker_array(detection, NOMINAL, FRAME, STAMP).markers
+    (nominal,) = [m for m in markers if m.ns == "nominal"]
+    assert nominal.type == Marker.LINE_STRIP
+    assert len(nominal.points) == 5, "a closed loop repeats its first corner"
+    assert nominal.points[0] == nominal.points[-1]
+    corners = sorted(
+        (round(u, 6), round(v, 6))
+        for u, v in (_in_board_plane(detection, p) for p in nominal.points[:4])
+    )
+    assert corners == [(-0.3, -0.3), (-0.3, 0.3), (0.3, -0.3), (0.3, 0.3)]
+
+
+def test_measured_edges_sit_where_their_names_say():
+    detection = _ok_detection()
+    width, height = detection.extents
+    markers = board_outline_marker_array(detection, NOMINAL, FRAME, STAMP).markers
+    measured = {m.text: m for m in markers if m.ns == "measured"}
+    assert set(measured) == {"left", "right", "bottom", "top"}
+    for name, marker in measured.items():
+        assert marker.type == Marker.LINE_LIST
+        assert len(marker.points) == 2
+        uv = [_in_board_plane(detection, p) for p in marker.points]
+        if name == "left":
+            assert all(abs(u + width / 2) < 1e-6 for u, _ in uv), uv
+        elif name == "right":
+            assert all(abs(u - width / 2) < 1e-6 for u, _ in uv), uv
+        elif name == "bottom":
+            assert all(abs(v + height / 2) < 1e-6 for _, v in uv), uv
+        else:
+            assert all(abs(v - height / 2) < 1e-6 for _, v in uv), uv
+
+
+def test_a_clean_board_draws_every_measured_edge_green():
+    detection = _ok_detection()
+    assert all(detection.observed_edges.values())
+    markers = board_outline_marker_array(detection, NOMINAL, FRAME, STAMP).markers
+    for marker in (m for m in markers if m.ns == "measured"):
+        assert (marker.color.r, marker.color.g) == (0.0, 1.0), marker.text
+
+
+def test_an_edge_the_detector_did_not_observe_is_drawn_red():
+    # The confidence tests' partial view: a third of the board hidden.
+    detection = _ok_detection(range_m=6.0, occlusion=("horizontal", 0.3, "low"))
+    hidden = {name for name, seen in detection.observed_edges.items() if not seen}
+    assert hidden, "the scene must hide at least one edge for this to prove anything"
+    markers = board_outline_marker_array(detection, NOMINAL, FRAME, STAMP).markers
+    for marker in (m for m in markers if m.ns == "measured"):
+        expected = (1.0, 0.0) if marker.text in hidden else (0.0, 1.0)
+        assert (marker.color.r, marker.color.g) == expected, marker.text

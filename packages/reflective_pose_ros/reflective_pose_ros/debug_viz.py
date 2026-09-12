@@ -134,6 +134,91 @@ def detection_points_cloud(result: DetectResult, frame_id: str, stamp) -> PointC
     return point_cloud2.create_cloud_xyz32(_header(frame_id, stamp), points.tolist())
 
 
+NOMINAL_OUTLINE_COLOUR = (0.0, 1.0, 1.0)
+SEEN_EDGE_COLOUR = (0.0, 1.0, 0.0)
+UNSEEN_EDGE_COLOUR = (1.0, 0.0, 0.0)
+
+
+def _point(vector) -> Point:
+    point = Point()
+    point.x, point.y, point.z = (float(v) for v in vector)
+    return point
+
+
+def board_outline_marker_array(
+    detection: BoardDetection, nominal_size, frame_id: str, stamp
+) -> MarkerArray:
+    """The detected board as two rectangles in its own plane, sensor frame.
+
+    ``nominal``: ``nominal_size`` (the configured width and height) around the
+    detected centre, one closed loop. It is the rectangle the published pose is
+    composed from.
+
+    ``measured``: the observed extents, one ``LINE_LIST`` per edge with the
+    edge's name in ``text``, green where the detector saw that edge and red
+    where it did not. A hidden edge is the one defect that biases the centre
+    rather than merely widening the covariance, so it is the one worth seeing;
+    a measured outline larger than the nominal one means a neighbour was
+    clustered in.
+
+    Edges follow the detector's own axes: ``left``/``right`` are the minimum
+    and maximum along ``detection.right``, ``bottom``/``top`` along
+    ``detection.up``, which is how ``_observed_edges`` names them.
+
+    Starts with a clear-all: the topic is latched, and an outline from an
+    earlier batch must not sit on screen looking current.
+    """
+    array = MarkerArray()
+    array.markers.append(clear_all_marker())
+    centre, right, up = detection.centre, detection.right, detection.up
+
+    def corners(width, height):
+        # bottom-left, bottom-right, top-right, top-left
+        return [
+            centre + su * width / 2 * right + sv * height / 2 * up
+            for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+        ]
+
+    nominal = Marker()
+    nominal.header = _header(frame_id, stamp)
+    nominal.ns = "nominal"
+    nominal.id = 0
+    nominal.type = Marker.LINE_STRIP
+    nominal.action = Marker.ADD
+    nominal.pose.orientation.w = 1.0
+    nominal.scale.x = 0.015
+    nominal.color.r, nominal.color.g, nominal.color.b = NOMINAL_OUTLINE_COLOUR
+    nominal.color.a = 1.0
+    ring = corners(*nominal_size)
+    nominal.points = [_point(c) for c in ring + ring[:1]]
+    array.markers.append(nominal)
+
+    bottom_left, bottom_right, top_right, top_left = corners(*detection.extents)
+    edges = (
+        ("bottom", bottom_left, bottom_right),
+        ("right", bottom_right, top_right),
+        ("top", top_right, top_left),
+        ("left", top_left, bottom_left),
+    )
+    for index, (name, start, end) in enumerate(edges):
+        marker = Marker()
+        marker.header = _header(frame_id, stamp)
+        marker.ns = "measured"
+        marker.id = index
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.025
+        seen = detection.observed_edges.get(name, False)
+        colour = SEEN_EDGE_COLOUR if seen else UNSEEN_EDGE_COLOUR
+        marker.color.r, marker.color.g, marker.color.b = colour
+        marker.color.a = 1.0
+        marker.text = name
+        marker.points = [_point(start), _point(end)]
+        array.markers.append(marker)
+    return array
+
+
 def board_pose_stamped(detection: BoardDetection, frame_id: str, stamp) -> PoseStamped:
     pose = PoseStamped()
     pose.header = _header(frame_id, stamp)

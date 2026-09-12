@@ -56,7 +56,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from reflective_pose_core.config import load_config
-from reflective_pose_core.detector import detect_board
+from reflective_pose_core.detector import Status, detect_board
 from reflective_pose_core.geometry import (
     CovarianceParams,
     covariance_from_detection,
@@ -67,7 +67,13 @@ from reflective_pose_core.geometry import (
     quaternion_from_matrix,
 )
 
-from .debug_viz import board_pose_stamped, detection_points_cloud, rejection_marker_array
+from .debug_viz import (
+    board_outline_marker_array,
+    board_pose_stamped,
+    clear_all_marker,
+    detection_points_cloud,
+    rejection_marker_array,
+)
 from .decision import Verdict, judge
 
 
@@ -85,9 +91,16 @@ class NodeParams:
     # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
     # batch taken while the vehicle rolls is smeared and the board's extents
     # measure wrong. Empty disables the guard: right on a bench, wrong on a
-    # vehicle. nav_msgs/Odometry and geometry_msgs/TwistStamped are both
-    # accepted; the node picks by the topic's advertised type.
+    # vehicle. nav_msgs/Odometry, geometry_msgs/TwistStamped and
+    # geometry_msgs/TwistWithCovarianceStamped are accepted.
     twist_topic: str = ""
+    # The motion source's message type, e.g.
+    # `geometry_msgs/msg/TwistWithCovarianceStamped`. Empty picks it from the
+    # topic's advertised type at startup, which is a race on a vehicle: the
+    # detector and the velocity source start together, and a topic not yet
+    # advertised is subscribed as Odometry for the life of the node. Name it
+    # on a vehicle.
+    twist_type: str = ""
     max_speed_for_accumulation: float = 0.05
 
 
@@ -194,6 +207,11 @@ class BoardDetectorNode(Node):
         self._points_pub = self.create_publisher(PointCloud2, "~/debug/board_points", latched)
         self._pose_pub = self.create_publisher(PoseStamped, "~/debug/board_pose", latched)
         self._rejected_pub = self.create_publisher(MarkerArray, "~/debug/rejected", latched)
+        # The detected board's outline, nominal and measured (golf-cart phase 7,
+        # A5). Latched like the rest, so every batch publishes one.
+        self._outline_pub = self.create_publisher(
+            MarkerArray, "~/debug/board_outline", latched
+        )
         self._diagnostics_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
 
         self.create_timer(1.0, self._publish_diagnostics)
@@ -225,18 +243,38 @@ class BoardDetectorNode(Node):
             )
             return
 
+        from geometry_msgs.msg import TwistStamped, TwistWithCovarianceStamped
         from nav_msgs.msg import Odometry
-        from geometry_msgs.msg import TwistStamped
 
-        # Pick by what is actually advertised, so one config key serves either
-        # source. Nothing published yet means we cannot tell; Odometry is the
-        # commoner of the two in this stack.
-        kind = Odometry
-        for name, types in self.get_topic_names_and_types():
-            if name == topic:
-                if any(t.endswith("TwistStamped") for t in types):
-                    kind = TwistStamped
-                break
+        # Every type _on_twist can read. TwistWithCovarianceStamped is what
+        # Autoware's vehicle_velocity_converter publishes, and before it was
+        # listed here such a topic fell through to Odometry and the
+        # subscription could never match.
+        supported = {
+            "nav_msgs/msg/Odometry": Odometry,
+            "geometry_msgs/msg/TwistStamped": TwistStamped,
+            "geometry_msgs/msg/TwistWithCovarianceStamped": TwistWithCovarianceStamped,
+        }
+        wanted = self._params.twist_type
+        if wanted:
+            if wanted not in supported:
+                raise ValueError(
+                    f"twist_type {wanted!r} is not one the motion guard can read; "
+                    f"expected one of {sorted(supported)}"
+                )
+            kind = supported[wanted]
+        else:
+            # Pick by what is actually advertised. Nothing published yet means
+            # we cannot tell, and Odometry is the guess; twist_type exists so a
+            # vehicle never has to rely on this.
+            kind = Odometry
+            for name, types in self.get_topic_names_and_types():
+                if name == topic:
+                    for advertised in types:
+                        if advertised in supported:
+                            kind = supported[advertised]
+                            break
+                    break
 
         self._twist_sub = self.create_subscription(kind, topic, self._on_twist, 10)
         self.get_logger().info(
@@ -324,6 +362,7 @@ class BoardDetectorNode(Node):
             height_offset=self._runtime_height_offset,
         )
         self._publish_clusters(result, frame_id)
+        self._publish_outline(result, frame_id)
 
         verdict = judge(result, self._min_confidence)
         self._last_verdict = verdict
@@ -395,6 +434,26 @@ class BoardDetectorNode(Node):
     def _publish_detection(self, detection, frame_id: str):
         stamp = self.get_clock().now().to_msg()
         self._pose_pub.publish(board_pose_stamped(detection, frame_id, stamp))
+
+    def _publish_outline(self, result, frame_id: str):
+        """The detected board's outline, or nothing, on every batch.
+
+        Drawn whenever the detector produced a detection, including one the
+        confidence gate then suppresses: a red, unobserved edge is usually why
+        it scored low, and this is where that shows. Cleared otherwise (no
+        candidate, or an ambiguous batch), because the topic is latched and an
+        outline from an earlier batch would sit on screen looking current.
+        """
+        stamp = self.get_clock().now().to_msg()
+        if result.status is Status.OK and result.detection is not None:
+            board = self._config.board
+            array = board_outline_marker_array(
+                result.detection, (board.width, board.height), frame_id, stamp
+            )
+        else:
+            array = MarkerArray()
+            array.markers.append(clear_all_marker())
+        self._outline_pub.publish(array)
 
     def _publish_clusters(self, result, frame_id: str):
         """Label every cluster this attempt looked at, kept or discarded.

@@ -88,3 +88,77 @@ def test_shipped_param_file_declares_exactly_the_node_parameters():
             assert node.get_parameter(name).value == value, name
     finally:
         node.destroy_node()
+
+
+# -- the motion guard's message type (golf-cart phase 7, A3) -----------------
+#
+# The vehicle's natural motion source is vehicle_velocity_converter's
+# `twist_with_covariance`, a geometry_msgs/TwistWithCovarianceStamped. The node
+# picked its subscription type by the topic's advertised type and knew only
+# Odometry and TwistStamped, so that topic fell through to Odometry and the
+# subscription could never match. And picking by advertisement is a race on a
+# vehicle, where the detector and the velocity converter start together: a
+# topic not yet advertised is subscribed as Odometry for the life of the node.
+# `twist_type` names the type outright; empty keeps the detection.
+
+
+def _wait_until_advertised(node, topic, timeout_s=3.0):
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if any(name == topic for name, _ in node.get_topic_names_and_types()):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"{topic} never appeared in the graph")
+
+
+def test_twist_with_covariance_stamped_is_detected_when_advertised():
+    from geometry_msgs.msg import TwistWithCovarianceStamped
+
+    advertiser = rclpy.create_node("twist_cov_advertiser")
+    advertiser.create_publisher(TwistWithCovarianceStamped, "/test_a3/twist_cov", 10)
+    try:
+        _wait_until_advertised(advertiser, "/test_a3/twist_cov")
+        node = make_node(twist_topic="/test_a3/twist_cov")
+        try:
+            assert node._twist_sub.msg_type is TwistWithCovarianceStamped
+        finally:
+            node.destroy_node()
+    finally:
+        advertiser.destroy_node()
+
+
+def test_explicit_twist_type_needs_no_publisher_to_exist_yet():
+    from geometry_msgs.msg import TwistWithCovarianceStamped
+
+    node = make_node(
+        twist_topic="/test_a3/not_advertised",
+        twist_type="geometry_msgs/msg/TwistWithCovarianceStamped",
+    )
+    try:
+        assert node._twist_sub.msg_type is TwistWithCovarianceStamped
+    finally:
+        node.destroy_node()
+
+
+def test_an_unsupported_twist_type_is_refused_by_name():
+    with pytest.raises(ValueError, match="twist_type"):
+        make_node(twist_topic="/test_a3/x", twist_type="std_msgs/msg/Float64")
+
+
+def test_speed_is_read_from_a_twist_with_covariance_stamped():
+    from geometry_msgs.msg import TwistWithCovarianceStamped
+
+    node = make_node(
+        twist_topic="/test_a3/speed",
+        twist_type="geometry_msgs/msg/TwistWithCovarianceStamped",
+    )
+    try:
+        msg = TwistWithCovarianceStamped()
+        msg.twist.twist.linear.x = 0.3
+        msg.twist.twist.linear.y = 0.4
+        node._on_twist(msg)
+        assert node._speed == pytest.approx(0.5)
+    finally:
+        node.destroy_node()

@@ -61,7 +61,11 @@ exists in it:
 up TF, accumulates scans, runs `core.detect_board`, and publishes
 
 - `~/board_pose` — `geometry_msgs/PoseWithCovarianceStamped`, the vehicle pose
-- `~/debug/*` — the existing marker, cloud and pose debug topics
+- `~/debug/*` — marker, cloud and pose debug topics, among them
+  `~/debug/board_outline`: the detected board as two rectangles in the sensor
+  frame, the configured size around the detected centre (`nominal`) and the
+  measured extents with each edge coloured by whether it was observed
+  (`measured`)
 - `/diagnostics` — as today
 
 It knows nothing about what anyone does with that pose.
