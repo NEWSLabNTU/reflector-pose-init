@@ -28,7 +28,7 @@ Launch the detector and open the supplied RViz layout:
 ros2 launch reflective_pose_ros board_detector.launch.xml \
     config_file:=/home/you/detector.yaml
 
-rviz2 -d "$(ros2 pkg prefix reflective_pose_ros)/share/reflective_pose_ros/rviz/board_detector.rviz"
+rviz2 -d "$(ros2 pkg prefix reflective_pose_ros --share)/rviz/board_detector.rviz"
 ```
 
 Check the input and diagnostics:
@@ -70,7 +70,7 @@ Replay the dump through the ROS viewer:
 ```bash
 ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
 
-rviz2 -d "$(ros2 pkg prefix reflective_pose_ros)/share/reflective_pose_ros/rviz/anchor_debug.rviz"
+rviz2 -d "$(ros2 pkg prefix reflective_pose_ros --share)/rviz/anchor_debug.rviz"
 ```
 
 The viewer publishes the full leveled cloud on `map_cloud`, not only the

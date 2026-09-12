@@ -65,7 +65,7 @@ constrain the estimated centre.
 Open the supplied RViz layout in another terminal:
 
 ```bash
-rviz2 -d "$(ros2 pkg prefix reflective_pose_ros)/share/reflective_pose_ros/rviz/board_detector.rviz"
+rviz2 -d "$(ros2 pkg prefix reflective_pose_ros --share)/rviz/board_detector.rviz"
 ```
 
 The detector publishes latched debug topics below its node namespace:
