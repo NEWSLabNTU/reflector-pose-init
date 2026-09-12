@@ -32,8 +32,8 @@ detector:
     range_min: 3.0
     range_max: 18.0
     # Ground-relative point-height gate, applied after the offset above.
-    height_min: 0.5
-    height_max: 1.65
+    height_min: 0.7
+    height_max: 1.9
     cluster_tolerance: 0.20
     cluster_min_points: 60
     board_centre_height: 1.3
@@ -50,17 +50,17 @@ detector:
     # height_max here. Ideally this board centre matches pose_in_map[2] when
     # the runtime offset and floor fit are correct and map ground is z=0.
     aabb:
-      min: [-.inf, -.inf, 0.5]
-      max: [.inf, .inf, 1.65]
+      min: [-20, -20, 0.5]
+      max: [20, 20, 1.1]
     range_min: 0.0
     range_max: .inf
-    cluster_tolerance: 0.15
-    cluster_min_points: 60
-    board_centre_height: 1.3
+    cluster_tolerance: 0.02
+    cluster_min_points: 800
+    board_centre_height: 0.8
     extent_tolerance: [0.8, 1.5]
     planarity_max_thickness: 0.08
     verticality_max_dot: 0.25
-    centre_height_tolerance: 0.30
+    centre_height_tolerance: 0.10
     density_max_ratio: 1.4
     density_check_enabled: false
 
