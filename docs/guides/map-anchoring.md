@@ -45,10 +45,48 @@ board dimensions and `board.pose_in_map`; there are deliberately no CLI
 overrides for them. Pass the exact file the vehicle will load when building a
 deployment map.
 
-## Restrict the map search
+## Tune map anchoring
 
-The detector file requires a map AABB. For a large map, narrow its inclusive
-crop in the same detector file:
+Map anchoring has two tuning jobs. **Grouping** decides which points can form a
+cluster and which nearby points connect. **Candidate gates** decide whether a
+formed cluster has the board's shape, orientation, height and density. Use this
+sequence when the board is missing or the result is ambiguous:
+
+1. **Loosen relevant parameters to expose hints.** Start with a broad AABB,
+   especially in `z` when the map floor height is uncertain; widen the map
+   range, increase `cluster_tolerance`, decrease `cluster_min_points`, and
+   temporarily widen candidate gates as needed. Keep the physical
+   `board.width` and `board.height` fixed. Keep the calibrated
+   `intensity_threshold` unless the debug data shows that the board returns
+   below the sensor cutoff. Run with `--dry-run --dump-debug`.
+2. **Tighten grouping until the shape is right.** Use the debug cloud and
+   cluster centroids to keep the expected board as one coherent cluster while
+   separating merged reflectors, background and outlier points. Narrow the
+   AABB, reduce `cluster_tolerance`, or increase `cluster_min_points` only as
+   far as the board remains connected and complete. A smaller
+   `cluster_min_points` admits more components; it does not connect points.
+3. **Tighten candidate gates to choose the board.** Restore the expected
+   centre-height, extent, planarity, verticality and density constraints one at
+   a time. Read the rejection reason after each run and finish with exactly
+   one candidate at the configured board pose. Do not generate deployment
+   artifacts from the loose diagnostic settings.
+
+### Grouping and input parameters
+
+These settings determine which points reach clustering:
+
+| Parameter | Loosen for diagnosis | Tighten after the board is visible |
+|---|---|---|
+| `detector.map.aabb` | Widen the `x`, `y` and especially `z` bounds so the board is not clipped | Crop around the board to exclude other reflectors and map clutter |
+| `detector.intensity_threshold` | Lower only when sensor evidence justifies admitting weaker returns; this setting is shared with runtime detection | Restore the calibrated sensor cutoff |
+| `detector.map.range_min` / `range_max` | Widen the usable range if the board is filtered out | Keep only the board's plausible range |
+| `detector.map.cluster_tolerance` | Increase it to bridge sparse returns | Reduce it until the board stays connected but nearby objects no longer merge |
+| `detector.map.cluster_min_points` | Decrease it so a sparse board component is retained | Increase it to remove small components and outliers; it does not change connectivity |
+
+`detector.map.aabb` is the exception that serves both tuning purposes: it is a
+pre-clustering point filter, and it restricts the locations where a candidate
+can exist. It is required, inclusive, and evaluated in the floor-levelled,
+floor-zero `map_debug` frame:
 
 ```yaml
 detector:
@@ -58,12 +96,29 @@ detector:
       max: [12.0, .inf, 1.65]
 ```
 
-The bounds are inclusive and are evaluated in the floor-levelled,
-floor-zero `map_debug` frame. Use `-.inf` for an unbounded lower side and
-`.inf` for an unbounded upper side. Do not use `null` or omit the AABB; a full
-map search is written explicitly with signed infinities. The crop filters only
-the detector input: floor fitting, viewpoint calculation, and the output map
-still use the complete cloud. The live detector ignores this map-only setting.
+Use `-.inf` for an unbounded lower side and `.inf` for an unbounded upper side.
+Do not use `null` or omit the AABB; a full-map search is written explicitly
+with signed infinities. Map mode has no `height_min` or `height_max`: the AABB
+`z` slab is its point-height filter. The crop filters only detector input;
+floor fitting, viewpoint calculation and the output map still use the complete
+cloud. The live detector ignores this map-only setting.
+
+### Candidate gates
+
+These settings run after clusters have formed and reject candidates that do not
+look like the configured board:
+
+| Parameter | Loosen for diagnosis | Tighten after the board is visible |
+|---|---|---|
+| `detector.map.board_centre_height` / `centre_height_tolerance` | Move the expected height or widen its tolerance when the floor datum is uncertain | Use the measured floor-relative board centre and a narrow justified tolerance |
+| `detector.map.extent_tolerance` | Lower the lower factor or raise the upper factor for systematic under- or over-observation | Reject clusters whose projected width or height is not board-sized |
+| `detector.map.planarity_max_thickness` | Raise it only for measured map noise | Keep it below the thickness of merged or non-planar objects |
+| `detector.map.verticality_max_dot` | Raise it only for a known board tilt | Reject surfaces that are too close to horizontal |
+| `detector.map.density_check_enabled` / `density_max_ratio` | Disable the check or raise the upper ratio when the density model is known to be wrong | Enable it and restore a measured upper bound when density is useful |
+
+`board.width` and `board.height` describe the physical board; they are not
+generic slack parameters. For the full gate order and rejection labels, see
+[configuration](../configuration.md).
 
 ## What it writes
 

@@ -50,17 +50,17 @@ detector:
     # height_max here. Ideally this board centre matches pose_in_map[2] when
     # the runtime offset and floor fit are correct and map ground is z=0.
     aabb:
-      min: [-20, -20, 0.5]
-      max: [20, 20, 1.1]
+      min: [-20, -20, 0.4]
+      max: [20, 20, 1.7]
     range_min: 0.0
     range_max: .inf
-    cluster_tolerance: 0.02
-    cluster_min_points: 800
-    board_centre_height: 0.8
+    cluster_tolerance: 0.05
+    cluster_min_points: 200
+    board_centre_height: 1.1
     extent_tolerance: [0.8, 1.5]
     planarity_max_thickness: 0.08
     verticality_max_dot: 0.25
-    centre_height_tolerance: 0.10
+    centre_height_tolerance: 1.0
     density_max_ratio: 1.4
     density_check_enabled: false
 
