@@ -20,11 +20,11 @@ a detector bias cancels instead of appearing as a localization error.
 
 ```bash
 # inspect; writes nothing
-anchor-map-to-board slam_export.ply -o /path/to/map \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
     --config /path/to/detector.yaml --dry-run
 
 # write the map artifacts
-anchor-map-to-board slam_export.ply -o /path/to/map \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map \
     --config /path/to/detector.yaml
 ```
 
@@ -92,11 +92,11 @@ second reflector, but matching sixty centroids against the cloud by hand is
 slow. Dump and view instead:
 
 ```bash
-anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
+ros2 run reflective_pose_cli anchor-map-to-board slam_export.ply -o /path/to/map --dry-run \
     --dump-debug /tmp/anchor.npz
 
 ros2 run reflective_pose_ros anchor_debug_viewer /tmp/anchor.npz
-rviz2 -d packages/reflective_pose_ros/rviz/anchor_debug.rviz    # Fixed Frame: map_debug
+rviz2 -d "$(ros2 pkg prefix reflective_pose_ros --share)/rviz/anchor_debug.rviz"    # Fixed Frame: map_debug
 ```
 
 The viewer publishes, latched:
