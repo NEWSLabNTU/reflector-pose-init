@@ -50,6 +50,7 @@ import rclpy
 from autoware_vehicle_msgs.msg import VelocityReport
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
@@ -362,7 +363,8 @@ def main(args=None):
     node = BoardPoseInitializer()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # SIGINT from a launch file shuts the context down under spin.
         pass
     finally:
         node.destroy_node()

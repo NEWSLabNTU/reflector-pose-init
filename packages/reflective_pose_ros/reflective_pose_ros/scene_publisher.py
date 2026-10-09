@@ -11,6 +11,7 @@ moves the board every scan for the tracking node.
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
@@ -166,7 +167,8 @@ def main(args=None):
     node = ScenePublisher()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # SIGINT from a launch file shuts the context down under spin.
         pass
     finally:
         node.destroy_node()

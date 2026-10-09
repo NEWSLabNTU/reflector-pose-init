@@ -48,6 +48,7 @@ import numpy as np
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
@@ -505,7 +506,8 @@ def main(args=None):
     node = BoardDetectorNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # SIGINT from a launch file shuts the context down under spin.
         pass
     finally:
         node.destroy_node()

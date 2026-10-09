@@ -74,6 +74,7 @@ import sys
 
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from rclpy.utilities import remove_ros_args
@@ -397,7 +398,8 @@ def main(args=None):
 
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # SIGINT from a launch file shuts the context down under spin.
         pass
     finally:
         node.destroy_node()
