@@ -185,3 +185,8 @@ The three ROS-free packages need only `PYTHONPATH`; the two ROS ones need
 - [Design](docs/design/reflective_pose_detector.md) — the package split and why
 - [Configuration](docs/configuration.md)
 - [Desk test](docs/guides/desk-test.md) — no hardware, synthetic scenes
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 NEWSLab,
+National Taiwan University.
