@@ -27,6 +27,7 @@ import yaml
 from .anchor import AnchorParams
 from .detector import Aabb, DetectorParams
 from .geometry import CovarianceParams
+from .sensors import DEFAULT_SENSOR, SensorModel, sensor_model
 
 CONFIG_ENV_VAR = "REFLECTIVE_POSE_CONFIG"
 CONFIG_BASENAME = "detector.yaml"
@@ -68,6 +69,8 @@ class DetectionPolicy:
     cluster_min_points: int = 60
     board_centre_height: float = 1.3
     extent_tolerance: Tuple[float, float] = (0.8, 1.5)
+    # See DetectorParams.extent_sampling_slack. Off keeps the measured gates.
+    extent_sampling_slack: bool = False
     planarity_max_thickness: float = 0.08
     verticality_max_dot: float = 0.25
     centre_height_tolerance: float = 0.30
@@ -117,8 +120,12 @@ class DetectorConfig:
     """Shared detector settings plus independent runtime and map policies."""
 
     intensity_threshold: float = 110.0
-    azimuth_step_rad: float = 0.0035
-    mean_elevation_step_rad: float = 0.0225
+    # The beam model, by name (reflective_pose_core.sensors). It supplies the
+    # elevation table, the sensor's up axis, and the two step sizes below.
+    sensor: str = DEFAULT_SENSOR
+    # Overrides of the sensor model's own steps; None takes the model's.
+    azimuth_step_rad: Optional[float] = None
+    mean_elevation_step_rad: Optional[float] = None
     min_confidence: float = 0.6
     runtime: RuntimeDetectionPolicy = field(default_factory=RuntimeDetectionPolicy)
     map_policy: MapDetectionPolicy = field(default_factory=_default_map_policy)
@@ -133,9 +140,23 @@ class DetectorConfig:
         """Compatibility view; the value is owned by ``detector.map.aabb``."""
         return self.map_policy.aabb
 
+    @property
+    def sensor_model(self) -> SensorModel:
+        """The named beam model."""
+        return sensor_model(self.sensor)
+
     def _resolve_common(
         self, policy: DetectionPolicy, board: BoardParams, scan_count: int
     ) -> Dict[str, Any]:
+        model = self.sensor_model
+        azimuth_step = (
+            model.azimuth_step_rad if self.azimuth_step_rad is None
+            else float(self.azimuth_step_rad)
+        )
+        elevation_step = (
+            model.mean_elevation_step_rad if self.mean_elevation_step_rad is None
+            else float(self.mean_elevation_step_rad)
+        )
         return dict(
             intensity_threshold=self.intensity_threshold,
             range_min=policy.range_min,
@@ -146,14 +167,17 @@ class DetectorConfig:
             board_height=board.height,
             board_centre_height=policy.board_centre_height,
             extent_tolerance=tuple(policy.extent_tolerance),
+            extent_sampling_slack=bool(policy.extent_sampling_slack),
             planarity_max_thickness=policy.planarity_max_thickness,
             verticality_max_dot=policy.verticality_max_dot,
             centre_height_tolerance=policy.centre_height_tolerance,
             density_max_ratio=policy.density_max_ratio,
             density_check_enabled=policy.density_check_enabled,
             min_confidence=self.min_confidence,
-            azimuth_step_rad=self.azimuth_step_rad,
-            mean_elevation_step_rad=self.mean_elevation_step_rad,
+            azimuth_step_rad=azimuth_step,
+            mean_elevation_step_rad=elevation_step,
+            elevation_table_rad=model.elevation_table_rad,
+            sensor_up=tuple(float(value) for value in model.up_axis),
             scan_count=scan_count,
         )
 
@@ -261,6 +285,7 @@ def load_config(path: Optional[str] = None, *, scan_count: Optional[int] = None)
     map_values = _mapping(resolved, "detector.map", detector_values.pop("map", None))
     common_names = {
         "intensity_threshold",
+        "sensor",
         "azimuth_step_rad",
         "mean_elevation_step_rad",
         "min_confidence",
@@ -311,6 +336,10 @@ def load_config(path: Optional[str] = None, *, scan_count: Optional[int] = None)
         runtime=runtime,
         map_policy=map_policy,
     )
+    try:
+        detector.sensor_model
+    except ValueError as error:
+        raise ValueError(f"{resolved}: detector.sensor: {error}") from error
 
     resolved_scan_count = 1 if scan_count is None else int(scan_count)
     if resolved_scan_count < 1:

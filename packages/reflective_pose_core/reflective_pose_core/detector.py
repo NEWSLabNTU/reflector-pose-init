@@ -15,7 +15,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .vlp32 import elevation_table
+from .sensors import DEFAULT_SENSOR, sensor_model
+
+
+def _default_elevation_table() -> np.ndarray:
+    return sensor_model(DEFAULT_SENSOR).elevation_table_rad
 
 
 class Status(Enum):
@@ -121,6 +125,13 @@ class DetectorParams:
 
     # Stage 3 gates
     extent_tolerance: Tuple[float, float] = (0.6, 1.2)
+    # Forgive the extent gate's lower bound the sampling loss: a measured
+    # extent is the distance between the outermost samples, so it falls short
+    # of the object by up to one sample spacing at *each* edge. Off by default,
+    # which is the behaviour the packaged initializer was measured with; needed
+    # on a sparse sensor, where a VLP-16's 2 deg rows are 0.23 m apart at
+    # 6.5 m and a 0.6 m board can read 0.23 m tall.
+    extent_sampling_slack: bool = False
     planarity_max_thickness: float = 0.03
     verticality_max_dot: float = 0.25
     centre_height_tolerance: float = 0.30
@@ -137,10 +148,18 @@ class DetectorParams:
 
     # Sensor model. The elevation table drives both the density gate and the
     # edge-observation margins; without it the density gate is skipped, because
-    # a mean-step approximation is wrong by 3x across the working range.
+    # a mean-step approximation is wrong by 3x across the working range. The
+    # defaults are the VLP-32C's; the detector file's ``detector.sensor``
+    # selects another model from reflective_pose_core.sensors.
     azimuth_step_rad: float = 0.0035  # 0.2 deg at 600 rpm / 10 Hz
     mean_elevation_step_rad: float = 0.0225  # mean gap of the VLP-32C table
-    elevation_table_rad: Optional[np.ndarray] = field(default_factory=elevation_table)
+    elevation_table_rad: Optional[np.ndarray] = field(
+        default_factory=_default_elevation_table
+    )
+    # The sensor's own up axis in the cloud frame. The elevation table is
+    # measured about it, so a driver that publishes in the sensor's native axes
+    # (Seyond: x up) needs it said; a Velodyne's is the cloud's z.
+    sensor_up: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     # Scans stacked before detection. The expected return count scales with it,
     # so a node accumulating 10 scans and a detector assuming 1 would reject
     # every real board as ten times too dense.
@@ -217,6 +236,20 @@ def _transform_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
     return points @ transform[:3, :3].T + transform[:3, 3]
 
 
+#: The 13 voxel offsets that, with their negatives, make up 26-connectivity.
+#: Each edge is found once from its lexicographically smaller end.
+_HALF_NEIGHBOURS = np.array(
+    [
+        (dx, dy, dz)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        for dz in (-1, 0, 1)
+        if (dx, dy, dz) > (0, 0, 0)
+    ],
+    dtype=np.int64,
+)
+
+
 def cluster_voxel_grid(
     points: np.ndarray, tolerance: float, min_points: int
 ) -> List[np.ndarray]:
@@ -271,6 +304,12 @@ def cluster_voxel_grid(
     return clusters
 
 
+def _sensor_elevation_height(params: DetectorParams, point: np.ndarray) -> float:
+    """``point``'s component along the sensor's own up axis."""
+    up = np.asarray(params.sensor_up, dtype=np.float64)
+    return float(np.dot(point, up) / max(np.linalg.norm(up), 1e-12))
+
+
 def _expected_point_count(
     params: DetectorParams, range_m: float, centre_z: float
 ) -> Optional[float]:
@@ -280,6 +319,9 @@ def _expected_point_count(
     The VLP-32C's gaps span 0.33 to 9.36 degrees, so which part of the fan the
     board falls into changes the count by a factor of three — a mean-step model
     is not merely imprecise, it is wrong in a range-dependent direction.
+
+    ``centre_z`` is the board centre's height along the sensor's own up axis
+    (``_sensor_elevation_height``), not the cloud frame's z.
     """
     if params.elevation_table_rad is None:
         return None
@@ -413,7 +455,7 @@ def confidence_terms(detection: BoardDetection, params: DetectorParams) -> Dict[
     terms["extent"] = _unit(1.0 - worst)
 
     expected = _expected_point_count(
-        params, detection.range_m, float(detection.centre[2])
+        params, detection.range_m, _sensor_elevation_height(params, detection.centre)
     )
     if expected is not None:
         ratio = detection.n_points / expected
@@ -481,11 +523,16 @@ def _evaluate_cluster(
     height = float(coords[:, 1].max() - coords[:, 1].min())
 
     lo, hi = params.extent_tolerance
-    if not (lo * params.board_width <= width <= hi * params.board_width):
+    slack_w = slack_h = 0.0
+    if params.extent_sampling_slack:
+        sample_range = float(np.linalg.norm(centroid - sensor_origin))
+        slack_w = 2.0 * sample_range * params.azimuth_step_rad
+        slack_h = 2.0 * sample_range * params.mean_elevation_step_rad
+    if not (lo * params.board_width - slack_w <= width <= hi * params.board_width):
         return None, Rejection(
             "bad_width", centroid, len(points), f"{width:.2f} m"
         )
-    if not (lo * params.board_height <= height <= hi * params.board_height):
+    if not (lo * params.board_height - slack_h <= height <= hi * params.board_height):
         return None, Rejection(
             "bad_height", centroid, len(points), f"{height:.2f} m"
         )
@@ -498,7 +545,9 @@ def _evaluate_cluster(
 
     range_m = float(np.linalg.norm(centroid - sensor_origin))
     if params.density_check_enabled:
-        expected = _expected_point_count(params, range_m, float(centroid[2]))
+        expected = _expected_point_count(
+            params, range_m, _sensor_elevation_height(params, centroid)
+        )
         if expected is not None:
             ratio = len(points) / expected
             if ratio > params.density_max_ratio:
@@ -589,14 +638,18 @@ def detect_board(
     if len(points) == 0:
         return DetectResult(Status.NO_CANDIDATE)
 
-    ranges = np.linalg.norm(points, axis=1)
-    heights = _transform_points(points, transform_height_frame_sensor)[:, 2] + height_offset
-
+    # Intensity first, and the geometric point gates on what survives it: the
+    # gates are a conjunction, so the order changes nothing but the cost, and
+    # on a dense sensor almost every point is diffuse (a Robin-W frame is
+    # ~220k points, of which a board is a few thousand).
+    candidates = points
+    ranges = np.linalg.norm(candidates, axis=1)
+    heights = _transform_points(candidates, transform_height_frame_sensor)[:, 2] + height_offset
     keep = intensity >= params.intensity_threshold
     keep &= (ranges >= params.range_min) & (ranges <= params.range_max)
     keep &= (heights >= params.height_min) & (heights <= params.height_max)
 
-    kept = points[keep]
+    kept = candidates[keep]
     result = DetectResult(Status.NO_CANDIDATE, n_after_gates=int(keep.sum()))
     if len(kept) < params.cluster_min_points:
         return result
