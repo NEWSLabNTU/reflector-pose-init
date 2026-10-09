@@ -202,6 +202,25 @@ packaged default.
   in each package asserts the file names exactly the parameters the node
   declares.
 
+## Tracking (added 2026-10-09)
+
+`board_tracking_node` is a second consumer of the same detector, for a vehicle
+following a handheld board rather than initializing a pose. It is a separate
+node, not a mode of `board_detector_node`, because each of the initializer's
+wiring choices is wrong for it: a latched output hands a late subscriber a
+stale board, stacking scans from a moving car smears the board, and the
+initializer's pose goes through a surveyed map pose that tracking has no use
+for. A `mode` parameter would have put a branch before each of those and given
+every node parameter two meanings. The detector file, `decision.judge` and
+`debug_viz` are shared unchanged.
+
+Tracking needed the detector to know its sensor. The elevation table had been
+the VLP-32C's, hard-coded; `reflective_pose_core.sensors` now holds one model
+per LiDAR, selected by `detector.sensor`, each with its intrinsic up axis in
+the cloud frame (the Seyond driver publishes x-up native axes). A file that
+names no sensor resolves to exactly the VLP-32C values it always had. See
+[tracking a moving board](../guides/tracking-mode.md).
+
 ## The CLI stays ROS-free
 
 `anchor_cli --rviz` currently imports `rclpy` inside a function to publish debug
@@ -228,6 +247,7 @@ with no ROS present.
 |---|---|---|
 | `anchor-map-to-board` | cli | `anchor_map_to_board` |
 | `board_detector_node` | ros | part of `board_pose_initializer` |
+| `board_tracking_node` | ros | new: the board in `base_link`, every scan |
 | `board_scene_publisher` | ros | same |
 | `anchor_debug_viewer` | ros | `anchor_cli --rviz` |
 | `board_pose_initializer` | autoware | the Autoware half of the old node |

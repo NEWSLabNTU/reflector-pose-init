@@ -9,6 +9,11 @@ batch of scans in which it finds the board with enough confidence, and nothing
 for the batches in which it does not. Whoever consumes the pose decides when
 the vehicle is stationary enough to act on one.
 
+The same detector also runs in **tracking mode**: `board_tracking_node` finds a
+moving, handheld board in every single scan and publishes its pose in
+`base_link`, for a vehicle that follows it. See
+[tracking a moving board](docs/guides/tracking-mode.md).
+
 New users: start with the [guide index](docs/guides/README.md), then follow the
 setup, configuration, runtime, map, and validation guide that matches your
 workflow.
@@ -18,9 +23,9 @@ workflow.
 | Package | Role | ROS | Autoware |
 |---|---|---|---|
 | `reflective_pose_core` | detector, map anchoring, geometry, point-cloud IO | no | no |
-| `reflective_pose_sim` | VLP-32C scan simulator and test scenes | no | no |
+| `reflective_pose_sim` | LiDAR scan simulator (VLP-32C, VLP-16, Robin-W) and test scenes | no | no |
 | `reflective_pose_cli` | `anchor-map-to-board` | no | no |
-| `reflective_pose_ros` | detector node, launch, RViz, debug viewer | yes | no |
+| `reflective_pose_ros` | detector and tracking nodes, launch, RViz, debug viewer | yes | no |
 | `reflective_pose_autoware` | velocity gate, `/localization/initialize` | yes | yes |
 
 ## Build
@@ -70,6 +75,22 @@ the file and pass it:
 ros2 launch reflective_pose_ros board_detector.launch.xml \
     config_file:=/path/to/my.yaml
 ```
+
+### Tracking
+
+```bash
+ros2 launch reflective_pose_ros board_tracking.launch.xml \
+    profile:=autosdv_robin_w input_topic:=/sensing/lidar/robin_w/pointcloud_raw \
+    output_topic:=/perception/coach/board
+```
+
+One scan per detection, no accumulation: on each accepted scan it publishes
+the board as `geometry_msgs/PoseStamped` in `base_link`, stamped with the scan,
+on `~/board` (remap with `output_topic`). Nothing is latched. `profile` picks a
+shipped detector file; `autosdv_vlp16` and `autosdv_robin_w` are provisional
+profiles for AutoSDV's low-mounted LiDARs. Where to hold the board, what a scan
+costs, and what the field bags must still measure:
+[tracking a moving board](docs/guides/tracking-mode.md).
 
 ## CLI
 
@@ -132,6 +153,12 @@ Autoware handoff policy — is ordinary ROS parameters, shipped as
 `board_detector.param.yaml` and `board_pose_initializer.param.yaml`. The
 anchoring tool's floor-fit knobs are its own flags.
 
+`detector.sensor` names the LiDAR's beam model -- `vlp32c` (the default),
+`vlp16`, `vlp16_hires` or `robin_w` -- which supplies the elevation table the
+density gate counts rows from. The packaged file names none and is the VLP-32C.
+`autosdv_vlp16.yaml` and `autosdv_robin_w.yaml` beside it are the tracking
+profiles.
+
 The detector file keeps shared sensor settings at `detector`, then separates
 the independent `detector.runtime` and `detector.map` policies. Runtime
 `height_min`/`height_max` are absolute heights above physical ground. Runtime
@@ -177,6 +204,8 @@ The three ROS-free packages need only `PYTHONPATH`; the two ROS ones need
 - [Configuring the detector](docs/guides/configuring.md) — create and select a
   deployment YAML
 - [Live detection](docs/guides/live-detection.md) — run against LiDAR and RViz
+- [Tracking a moving board](docs/guides/tracking-mode.md) — the board in
+  `base_link` every scan, the AutoSDV profiles, latency
 - [Autoware initialization](docs/guides/autoware-initialization.md) — hand the
   pose to `/localization/initialize`
 - [Debugging](docs/guides/debugging.md) — inspect live and offline failures

@@ -4,8 +4,10 @@ One file per reader.
 
 | File | Read by | Holds |
 |---|---|---|
-| `detector.yaml` | `board_detector_node` (`config_file`), `anchor-map-to-board` (`--config`) | the board, the detection gates, the guess covariance |
+| `detector.yaml` | `board_detector_node` (`config_file`), `anchor-map-to-board` (`--config`) | the board, the sensor, the detection gates, the guess covariance |
+| `autosdv_vlp16.yaml`, `autosdv_robin_w.yaml` | `board_tracking_node` (`config_file`, or `profile:=` in launch) | detector files for AutoSDV tracking; same schema |
 | `board_detector.param.yaml` | `board_detector_node`, as ROS parameters | frames, accumulation, the motion guard |
+| `board_tracking.param.yaml` | `board_tracking_node`, as ROS parameters | frames, debug output, diagnostics |
 | `board_pose_initializer.param.yaml` | `board_pose_initializer`, as ROS parameters | the Autoware handoff policy |
 | flags of `anchor-map-to-board` | the tool | the floor fit |
 
@@ -22,7 +24,10 @@ Packaged defaults:
 
 ```
 packages/reflective_pose_core/reflective_pose_core/data/detector.yaml
+packages/reflective_pose_core/reflective_pose_core/data/autosdv_vlp16.yaml
+packages/reflective_pose_core/reflective_pose_core/data/autosdv_robin_w.yaml
 packages/reflective_pose_ros/config/board_detector.param.yaml
+packages/reflective_pose_ros/config/board_tracking.param.yaml
 packages/reflective_pose_autoware/config/board_pose_initializer.param.yaml
 ```
 
@@ -59,7 +64,7 @@ height datum and tuning.
 `accumulate_scans` to the loader, because the expected return count scales with
 the number of stacked scans: a node accumulating ten against a detector
 assuming one rejects every real board as ten times too dense. The anchoring
-tool leaves it at one.
+tool and the tracking node leave it at one.
 
 ### board
 
@@ -82,9 +87,21 @@ The top level contains settings shared by both policies:
 | Key | Default | Meaning |
 |---|---|---|
 | `intensity_threshold` | `100.0` | retroreflector band cutoff |
-| `azimuth_step_rad` | `0.0035` | sensor azimuth resolution, radians |
-| `mean_elevation_step_rad` | `0.0225` | sensor elevation step used by the density model, radians |
+| `sensor` | `vlp32c` | beam model: `vlp32c`, `vlp16`, `vlp16_hires`, `robin_w` (`reflective_pose_core.sensors`) |
+| `azimuth_step_rad` | the sensor's | override of the model's azimuth resolution, radians |
+| `mean_elevation_step_rad` | the sensor's | override of the model's mean row spacing, radians |
 | `min_confidence` | `0.6` | below this, a surviving runtime cluster is not published |
+
+`sensor` supplies the elevation table the density gate and the density
+confidence term count rows from, the mean row spacing the edge-observation
+margins use, and the sensor's own up axis in the cloud frame. Elevations are
+measured about that axis, so a driver publishing native axes is handled: the
+`robin_w` model is in Seyond's x-up, z-forward frame, which is what AutoSDV's
+driver publishes (`coordinate_mode: 0`). The Velodyne models are Nebula's
+calibration tables; `robin_w` is an approximation (192 lines uniform over
+70 deg, 0.1 deg over 120 deg) and should not drive the density *gate* until a
+bag confirms it. Omitting `sensor` gives the VLP-32C with the 0.0035/0.0225
+steps the packaged file was measured with.
 
 The policy-specific gates are independent. Matching defaults do not make the
 two clouds share a hidden flat parameter set.
@@ -103,11 +120,20 @@ transform are expressed relative to `base_link`:
 | `cluster_min_points` | `60` | smallest cluster considered |
 | `board_centre_height` | `1.3` | expected board centre above physical ground, metres |
 | `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
+| `extent_sampling_slack` | `false` | lower the extent gate's minimum by one sample spacing per edge |
 | `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
 | `verticality_max_dot` | `0.25` | how far off vertical the normal may be |
 | `centre_height_tolerance` | `0.30` | slack on this policy's `board_centre_height` |
 | `density_max_ratio` | `1.4` | upper bound on returns vs expected |
 | `density_check_enabled` | `true` | whether the density gate runs |
+
+`extent_sampling_slack` exists for sparse sensors. A measured extent is the
+distance between the outermost samples, so it falls short of the object by up
+to one sample spacing at each edge; with the slack on, the gate's lower bound
+is `lo * nominal - 2 * range * step` on each axis (azimuth step for width, mean
+elevation step for height). A VLP-16's rings are 0.14 m apart at 4 m, and a
+0.6 m board can read 0.3 m tall without it. Off keeps the gate the packaged
+file was measured with. `detector.map` accepts the key too.
 
 The node transforms with the real `base_link <- sensor` TF. It computes
 `height_above_ground = z_base_link + base_link_height_above_ground` for the
@@ -131,6 +157,7 @@ filter; the separate map range gate defaults to unbounded. Map mode has no
 | `cluster_min_points` | `60` | smallest cluster considered |
 | `board_centre_height` | `1.3` | expected board centre above physical ground, metres |
 | `extent_tolerance` | `[0.8, 1.5]` | accepted fraction of nominal size |
+| `extent_sampling_slack` | `false` | as for `detector.runtime` |
 | `planarity_max_thickness` | `0.08` | plane-fit thickness limit, metres |
 | `verticality_max_dot` | `0.25` | how far off vertical the normal may be |
 | `centre_height_tolerance` | `0.30` | slack on this policy's `board_centre_height` |
@@ -277,6 +304,24 @@ the node picks the type from what the topic advertises when it starts, and on a
 vehicle the detector and the velocity source start together: a topic not yet
 advertised is subscribed as `Odometry` for the life of the node, and the guard
 never sees a message. Anything else is refused at startup, naming `twist_type`.
+
+## board_tracking.param.yaml
+
+Ordinary `ros__parameters`, under `/**`, held to `TrackingParams` by a test
+the same way. The node always detects on one scan; there is no
+`accumulate_scans` and no motion guard.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sensor_frame` | `""` | empty takes each cloud's `header.frame_id` |
+| `base_frame` | `base_link` | height datum of the runtime gates; static TF to the sensor |
+| `target_frame` | `""` | frame of the published `~/board`; empty is `base_frame`, anything else is looked up at the scan stamp |
+| `publish_debug` | `true` | publish `~/debug/*` every scan |
+| `diagnostics_window` | `2.0` | seconds over which rates and timings are computed |
+| `min_detection_rate` | `5.0` | Hz; `/diagnostics` is WARN below it |
+
+The AutoSDV profiles and why each value is what it is:
+[tracking a moving board](guides/tracking-mode.md#the-autosdv-profiles).
 
 ## board_pose_initializer.param.yaml
 

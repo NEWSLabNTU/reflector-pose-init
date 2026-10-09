@@ -16,6 +16,10 @@ ros2 launch reflective_pose_ros simulated_scene.launch.xml scene:=distractors
 Expected outcomes, in order: a detection, an ambiguity abort, and a clean
 no-candidate.
 
+The tracking node has its own desk test, `simulated_tracking.launch.xml`, with
+a walking board and AutoSDV's sensors: see
+[tracking a moving board](tracking-mode.md#desk-test).
+
 With the default node name, inspect the result and diagnostics from another
 terminal:
 

@@ -23,6 +23,9 @@ you need detail.
 8. [Rosbag validation](rosbag-validation.md) — replay a stationary real scan
    before enabling the vehicle path.
 
+Following a moving board rather than initializing a pose is a separate path:
+[Tracking a moving board](tracking-mode.md).
+
 ## I want to…
 
 | Goal | Guide |
@@ -35,6 +38,7 @@ you need detail.
 | Understand a rejected board | [Debugging detection](debugging.md) |
 | Send the pose to Autoware | [Autoware initialization](autoware-initialization.md) |
 | Validate a rosbag | [Rosbag validation](rosbag-validation.md) |
+| Follow a handheld board, every scan, in `base_link` | [Tracking a moving board](tracking-mode.md) |
 
 ## References
 
