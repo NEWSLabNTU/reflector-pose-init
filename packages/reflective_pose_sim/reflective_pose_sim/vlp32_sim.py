@@ -1,9 +1,17 @@
-"""Synthetic VLP-32C scan generator.
+"""Synthetic LiDAR scan generator.
 
-The beam model reads the per-laser elevation and azimuth corrections from the
-Nebula calibration file the driver itself uses, so ring coverage on a target at
-range is faithful rather than assumed uniform. The table is embedded as a
-fallback so the tests run on machines without Autoware installed.
+Named for the VLP-32C it was written for; it now casts any beam model in
+``reflective_pose_core.sensors`` (``SimParams.sensor``), so the VLP-16 and
+Robin-W profiles are tested against the sampling pattern they will see. The
+Velodyne models are the Nebula calibration tables the driver itself uses, so
+ring coverage on a target at range is faithful rather than assumed uniform; the
+Robin-W model is an approximation, and says so.
+
+Scenes are built in the sensor's intrinsic frame (x forward, z up). The cast
+points are rotated into the frame the driver would publish them in
+(``SensorModel.cloud_rotation``) as the last step, so a Seyond scan comes out in
+Seyond's native axes exactly as the live driver's does, and the detector has to
+cope with that rather than with a convenient copy.
 
 Intensity reproduces the sensor's calibrated-reflectivity semantics: 0-100 for
 diffuse surfaces, 101-255 reserved for retroreflectors. The detector's intensity
@@ -11,11 +19,11 @@ gate is tested against that contract rather than against a guessed number.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
-from reflective_pose_core.vlp32 import load_beam_table
+from reflective_pose_core.sensors import DEFAULT_SENSOR, SensorModel, sensor_model
 
 DIFFUSE = "diffuse"
 RETRO = "retro"
@@ -71,7 +79,11 @@ class Scene:
 
 @dataclass
 class SimParams:
-    azimuth_step_rad: float = 0.0035  # 0.2 deg at 600 rpm / 10 Hz
+    # A name from reflective_pose_core.sensors.
+    sensor: str = DEFAULT_SENSOR
+    # None takes the sensor model's column spacing (0.2 deg for a Velodyne at
+    # 600 rpm / 10 Hz).
+    azimuth_step_rad: Optional[float] = None
     range_noise: float = 0.02
     dropout: float = 0.02
     blooming: bool = False
@@ -83,16 +95,24 @@ class SimParams:
 
 @dataclass
 class Scan:
-    points: np.ndarray  # (N, 3) sensor frame
+    points: np.ndarray  # (N, 3) the driver's cloud frame
     intensity: np.ndarray  # (N,)
     ring: np.ndarray  # (N,)
     source: np.ndarray  # (N,) index into scene.rectangles, -1 for bloom halo
 
 
+def model_of(params: SimParams) -> SensorModel:
+    """The beam model a ``SimParams`` names."""
+    return sensor_model(params.sensor)
+
+
 def beam_directions(params: SimParams) -> Tuple[np.ndarray, np.ndarray]:
-    """Unit direction per (azimuth, laser) pair, with the ring index."""
-    vertical, rotational = load_beam_table()
-    azimuths = np.arange(0.0, 2.0 * np.pi, params.azimuth_step_rad)
+    """Unit direction per (azimuth, laser) pair in the intrinsic frame, with the ring index."""
+    model = model_of(params)
+    vertical, rotational = model.elevation_rad, model.azimuth_offset_rad
+    step = model.azimuth_step_rad if params.azimuth_step_rad is None else params.azimuth_step_rad
+    lo, hi = model.azimuth_fov_rad or (0.0, 2.0 * np.pi)
+    azimuths = np.arange(lo, hi, step)
 
     azimuth_grid = azimuths[:, None] + rotational[None, :]
     elevation_grid = np.broadcast_to(vertical[None, :], azimuth_grid.shape)
@@ -224,6 +244,10 @@ def simulate(scene: Scene, params: SimParams = SimParams()) -> Scan:
         points, intensity, rings, source = _add_bloom_halo(
             scene, points, intensity, rings, source, params, rng
         )
+
+    rotation = model_of(params).cloud_rotation
+    if not np.array_equal(rotation, np.eye(3)):
+        points = points @ rotation.T
 
     return Scan(points=points, intensity=intensity, ring=rings, source=source)
 
