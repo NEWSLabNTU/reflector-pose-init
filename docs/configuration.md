@@ -259,7 +259,7 @@ exactly the parameters the node declares, with the node's own defaults.
 |---|---|---|
 | `sensor_frame` | `velodyne` | must match the cloud's `header.frame_id` |
 | `base_frame` | `base_link` | static TF to `sensor_frame` must exist |
-| `accumulate_scans` | `10` | scans stacked per detection attempt |
+| `accumulate_scans` | `1` | scans stacked per detection attempt |
 | `twist_topic` | `""` | motion guard source; empty disables it |
 | `twist_type` | `""` | the motion source's message type; empty detects it at startup |
 | `max_speed_for_accumulation` | `0.05` | m/s above which scans are discarded |

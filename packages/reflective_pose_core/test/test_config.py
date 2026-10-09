@@ -283,7 +283,8 @@ def test_packaged_defaults_are_the_decided_values(monkeypatch):
     assert config.detector.intensity_threshold == 100.0
     assert config.detector.runtime.base_link_height_above_ground == 0.265
     assert config.runtime_detector.board_centre_height == 1.3
-    assert config.map_detector.board_centre_height == 1.3
+    # The map policy was retuned for the sparse anchoring map in 8cb17c7.
+    assert config.map_detector.board_centre_height == 1.1
     assert config.map_detector.height_min == float("-inf")
     assert config.map_detector.height_max == float("inf")
 

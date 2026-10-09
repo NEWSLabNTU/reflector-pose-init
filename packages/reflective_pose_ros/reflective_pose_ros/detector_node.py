@@ -86,8 +86,9 @@ class NodeParams:
     # Feeds DetectorParams.scan_count. The expected return count scales with
     # it, so a node accumulating 10 scans against a detector assuming 1 rejects
     # every real board as ten times too dense. Set here once; load_config
-    # derives the rest.
-    accumulate_scans: int = 10
+    # derives the rest. One since f218dc3, which measured a single VLP scan
+    # against the wider height gates.
+    accumulate_scans: int = 1
     # Stacking scans assumes a stationary sensor -- nothing deskews them, so a
     # batch taken while the vehicle rolls is smeared and the board's extents
     # measure wrong. Empty disables the guard: right on a bench, wrong on a
