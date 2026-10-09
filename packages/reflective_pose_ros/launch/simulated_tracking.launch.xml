@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<!--
+  Desk test for tracking: synthetic AutoSDV scans of a handheld board into
+  board_tracking_node, no hardware. scene:=walking moves the board away at
+  speed_mps every scan and starts over; scene:=tracking holds it still at
+  range_m. The sensor model and its profile go together: sensor:=robin_w
+  profile:=autosdv_robin_w, or sensor:=vlp16 profile:=autosdv_vlp16 (hold
+  the board at knee height there: centre_height:=0.55).
+
+  The publisher puts the LiDAR at base_link (TF z = 0, as AutoSDV's
+  calibration does) and the profile's base_link_height_above_ground supplies
+  the 0.30 m mounting height.
+-->
+<launch>
+  <arg name="sensor" default="robin_w"/>
+  <arg name="profile" default="autosdv_robin_w"/>
+  <arg name="scene" default="walking"/>   <!-- walking | tracking | tracking_distractors -->
+  <arg name="range_m" default="2.0"/>
+  <arg name="centre_height" default="1.0"/>
+  <arg name="speed_mps" default="1.0"/>
+  <arg name="output_topic" default="/board_tracking/board"/>
+  <arg name="rviz" default="false"/>
+
+  <node pkg="reflective_pose_ros" exec="board_scene_publisher"
+        name="board_scene_publisher" output="screen">
+    <param name="sensor" value="$(var sensor)"/>
+    <param name="sensor_frame" value="$(var sensor)"/>
+    <param name="sensor_height" value="0.30"/>
+    <param name="tf_sensor_height" value="0.0"/>
+    <param name="scene" value="$(var scene)"/>
+    <param name="range_m" value="$(var range_m)"/>
+    <param name="centre_height" value="$(var centre_height)"/>
+    <param name="speed_mps" value="$(var speed_mps)"/>
+    <param name="output_topic" value="/sim/points"/>
+  </node>
+
+  <include file="$(find-pkg-share reflective_pose_ros)/launch/board_tracking.launch.xml">
+    <arg name="profile" value="$(var profile)"/>
+    <arg name="input_topic" value="/sim/points"/>
+    <arg name="output_topic" value="$(var output_topic)"/>
+  </include>
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share reflective_pose_ros)/rviz/board_detector.rviz"/>
+</launch>

@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'board_detector_node = reflective_pose_ros.detector_node:main',
+            'board_tracking_node = reflective_pose_ros.tracking_node:main',
             'board_scene_publisher = reflective_pose_ros.scene_publisher:main',
             'anchor_debug_viewer = reflective_pose_ros.anchor_debug_viewer:main',
         ],

@@ -1,0 +1,23 @@
+# Wiring for board_tracking_node: where it is plugged in, not what it looks for.
+# What it looks for is the detector file (`config_file`; the AutoSDV profiles
+# are autosdv_vlp16.yaml and autosdv_robin_w.yaml in reflective_pose_core). The
+# input cloud is ~/input/pointcloud and the output ~/board, both remapped in
+# launch.
+#
+# Every key here is a field of TrackingParams in tracking_node.py, and the
+# values are the node's own defaults; a test holds the two together.
+/**:
+  ros__parameters:
+    # Empty takes the frame from each cloud's header.
+    sensor_frame: ""
+    # Height datum of the detector's gates (plus the detector file's
+    # base_link_height_above_ground). Static TF to the sensor must exist.
+    base_frame: base_link
+    # Frame of the published board pose. Empty is base_frame.
+    target_frame: ""
+    # ~/debug/* every scan. Turn off on a CPU-bound vehicle.
+    publish_debug: true
+    # /diagnostics: rates and timings over this many seconds, and WARN below
+    # this detection rate.
+    diagnostics_window: 2.0
+    min_detection_rate: 5.0

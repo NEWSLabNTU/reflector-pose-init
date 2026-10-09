@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!--
+  The board in every scan, in base_link: board_tracking_node publishes a
+  geometry_msgs/PoseStamped on each accepted detection, stamped with the scan.
+  Nothing is accumulated and nothing is latched. See docs/guides/tracking-mode.md.
+
+  profile picks a detector file shipped by reflective_pose_core
+  (detector, autosdv_vlp16, autosdv_robin_w); config_file overrides it with
+  any path. params_file is the node's wiring. Input and output are remaps.
+-->
+<launch>
+  <arg name="profile" default="detector"
+       description="detector file shipped by reflective_pose_core, without .yaml"/>
+  <arg name="config_file"
+       default="$(find-pkg-share reflective_pose_core)/config/$(var profile).yaml"
+       description="the detector file: board, sensor, gates"/>
+  <arg name="params_file"
+       default="$(find-pkg-share reflective_pose_ros)/config/board_tracking.param.yaml"
+       description="the node's wiring: frames, debug output, diagnostics"/>
+  <arg name="input_topic" default="/sensing/lidar/top/pointcloud_raw_ex"
+       description="PointCloud2 with an intensity field"/>
+  <arg name="node_name" default="board_tracking"/>
+  <arg name="output_topic" default="/$(var node_name)/board"
+       description="where the board pose is published"/>
+
+  <node pkg="reflective_pose_ros" exec="board_tracking_node"
+        name="$(var node_name)" output="screen">
+    <param from="$(var params_file)"/>
+    <param name="config_file" value="$(var config_file)"/>
+    <remap from="~/input/pointcloud" to="$(var input_topic)"/>
+    <remap from="~/board" to="$(var output_topic)"/>
+  </node>
+</launch>
