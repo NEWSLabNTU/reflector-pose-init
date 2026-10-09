@@ -131,7 +131,9 @@ def detection_points_cloud(result: DetectResult, frame_id: str, stamp) -> PointC
         points = np.vstack([c.points for c in result.candidates])
     else:
         points = np.zeros((0, 3))
-    return point_cloud2.create_cloud_xyz32(_header(frame_id, stamp), points.tolist())
+    return point_cloud2.create_cloud_xyz32(
+        _header(frame_id, stamp), np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    )
 
 
 NOMINAL_OUTLINE_COLOUR = (0.0, 1.0, 1.0)
@@ -240,4 +242,6 @@ def xyzi_cloud(points: np.ndarray, intensity: np.ndarray, frame_id: str, stamp) 
     provide this the way the runtime node's ``input_topic`` does.
     """
     data = np.column_stack((points, intensity)).astype(np.float32)
-    return point_cloud2.create_cloud(_header(frame_id, stamp), XYZI_FIELDS, data.tolist())
+    # An unstructured float32 array is converted in one step; a list of rows
+    # is converted point by point, which costs tens of milliseconds per scan.
+    return point_cloud2.create_cloud(_header(frame_id, stamp), XYZI_FIELDS, data)

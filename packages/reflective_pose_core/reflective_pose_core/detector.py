@@ -257,50 +257,73 @@ def cluster_voxel_grid(
 
     Points are binned at ``tolerance`` resolution and occupied voxels are joined
     under 26-connectivity. This approximates Euclidean clustering at the same
-    tolerance in O(N), needs no KD-tree, and is deterministic.
+    tolerance in O(N log N), needs no KD-tree, and is deterministic.
 
     The tolerance is governed by *across-ring* spacing rather than within-ring
     spacing: the VLP-32C's elevation gaps run from 0.33 deg to 9.36 deg, so a
     tolerance tuned to the dense band splits a board into horizontal stripes.
 
-    Returns index arrays, largest cluster first.
+    Vectorised, because tracking runs it on every scan: voxels are encoded as
+    one integer each, neighbours are found with a sorted search, and component
+    labels are propagated along the edges until they stop changing (as many
+    rounds as the widest component is long, a handful for a board). A
+    pure-Python flood fill cost 8 ms of a Robin-W frame with a board at 1.5 m.
+
+    Returns sorted index arrays, largest cluster first; equal sizes keep the
+    order of their first point.
     """
     if len(points) == 0:
         return []
 
-    keys = np.floor(points / tolerance).astype(np.int64)
-    voxels: Dict[Tuple[int, int, int], List[int]] = {}
-    for idx, key in enumerate(map(tuple, keys)):
-        voxels.setdefault(key, []).append(idx)
+    keys = np.floor(np.asarray(points, dtype=np.float64) / tolerance).astype(np.int64)
+    # Shift so every key and every neighbour of one is a non-negative index,
+    # then fold the three axes into one code.
+    keys -= keys.min(axis=0) - 1
+    dims = keys.max(axis=0) + 2
+    codes = (keys[:, 0] * dims[1] + keys[:, 1]) * dims[2] + keys[:, 2]
 
-    neighbours = [
-        (dx, dy, dz)
-        for dx in (-1, 0, 1)
-        for dy in (-1, 0, 1)
-        for dz in (-1, 0, 1)
-        if (dx, dy, dz) != (0, 0, 0)
-    ]
+    voxel_codes, point_voxel = np.unique(codes, return_inverse=True)
+    point_voxel = point_voxel.reshape(-1)
+    n_voxels = len(voxel_codes)
 
-    unvisited = set(voxels)
-    clusters: List[np.ndarray] = []
-    while unvisited:
-        seed = unvisited.pop()
-        component = [seed]
-        stack = [seed]
-        while stack:
-            cx, cy, cz = stack.pop()
-            for dx, dy, dz in neighbours:
-                nb = (cx + dx, cy + dy, cz + dz)
-                if nb in unvisited:
-                    unvisited.remove(nb)
-                    component.append(nb)
-                    stack.append(nb)
+    # Edges between occupied voxels.
+    first = np.zeros(n_voxels, dtype=np.int64)
+    first[point_voxel[::-1]] = np.arange(len(points))[::-1]
+    voxel_keys = keys[first]
+    sources, targets = [], []
+    for offset in _HALF_NEIGHBOURS:
+        neighbour = voxel_keys + offset
+        neighbour_codes = (neighbour[:, 0] * dims[1] + neighbour[:, 1]) * dims[2] + neighbour[:, 2]
+        where = np.searchsorted(voxel_codes, neighbour_codes)
+        where = np.minimum(where, n_voxels - 1)
+        hit = voxel_codes[where] == neighbour_codes
+        if hit.any():
+            sources.append(np.flatnonzero(hit))
+            targets.append(where[hit])
 
-        indices = np.concatenate([np.asarray(voxels[v], dtype=np.int64) for v in component])
-        if len(indices) >= min_points:
-            clusters.append(indices)
+    labels = np.arange(n_voxels)
+    if sources:
+        a = np.concatenate(sources)
+        b = np.concatenate(targets)
+        while True:
+            low = np.minimum(labels[a], labels[b])
+            updated = labels.copy()
+            np.minimum.at(updated, a, low)
+            np.minimum.at(updated, b, low)
+            # Pointer jumping: a label's own label, until it is a root.
+            updated = updated[updated]
+            if np.array_equal(updated, labels):
+                break
+            labels = updated
 
-    clusters.sort(key=len, reverse=True)
+    point_labels = labels[point_voxel]
+    order = np.argsort(point_labels, kind="stable")
+    sorted_labels = point_labels[order]
+    boundaries = np.flatnonzero(np.diff(sorted_labels)) + 1
+    groups = np.split(order, boundaries)
+
+    clusters = [group for group in groups if len(group) >= min_points]
+    clusters.sort(key=lambda group: (-len(group), int(group[0])))
     return clusters
 
 
@@ -642,11 +665,10 @@ def detect_board(
     # gates are a conjunction, so the order changes nothing but the cost, and
     # on a dense sensor almost every point is diffuse (a Robin-W frame is
     # ~220k points, of which a board is a few thousand).
-    candidates = points
+    candidates = points[intensity >= params.intensity_threshold]
     ranges = np.linalg.norm(candidates, axis=1)
     heights = _transform_points(candidates, transform_height_frame_sensor)[:, 2] + height_offset
-    keep = intensity >= params.intensity_threshold
-    keep &= (ranges >= params.range_min) & (ranges <= params.range_max)
+    keep = (ranges >= params.range_min) & (ranges <= params.range_max)
     keep &= (heights >= params.height_min) & (heights <= params.height_max)
 
     kept = candidates[keep]

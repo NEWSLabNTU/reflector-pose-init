@@ -1,15 +1,16 @@
-"""Sensor models, and how the detector file selects one.
+"""Sensor models, how the detector file selects one, and the shared clustering.
 
 The elevation table used to be the VLP-32C's, hard-coded. These pin the
-tables that replaced it, and the default that keeps the packaged initializer
-on exactly the table it was measured with.
+tables that replaced it, the default that keeps the packaged initializer on
+exactly the table it was measured with, and the vectorised clustering that
+tracking runs on every scan.
 """
 
 import numpy as np
 import pytest
 
 from reflective_pose_core.config import load_config
-from reflective_pose_core.detector import DetectorParams
+from reflective_pose_core.detector import DetectorParams, cluster_voxel_grid
 from reflective_pose_core.sensors import SENSOR_NAMES, sensor_model
 from reflective_pose_core.vlp32 import elevation_table
 
@@ -103,3 +104,67 @@ def test_a_file_without_a_sensor_keeps_the_vlp32c(tmp_path, monkeypatch):
     assert params.mean_elevation_step_rad == pytest.approx(0.0225, abs=2e-4)
     assert params.sensor_up == (0.0, 0.0, 1.0)
     assert params.extent_sampling_slack is False
+
+
+# -- clustering ----------------------------------------------------------------
+
+
+def _flood_fill_reference(points, tolerance, min_points):
+    """The pure-Python clustering this module shipped before tracking."""
+    keys = np.floor(points / tolerance).astype(np.int64)
+    voxels = {}
+    for idx, key in enumerate(map(tuple, keys)):
+        voxels.setdefault(key, []).append(idx)
+    neighbours = [
+        (dx, dy, dz)
+        for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+        if (dx, dy, dz) != (0, 0, 0)
+    ]
+    unvisited = set(voxels)
+    clusters = []
+    while unvisited:
+        seed = unvisited.pop()
+        component, stack = [seed], [seed]
+        while stack:
+            cx, cy, cz = stack.pop()
+            for dx, dy, dz in neighbours:
+                nb = (cx + dx, cy + dy, cz + dz)
+                if nb in unvisited:
+                    unvisited.remove(nb)
+                    component.append(nb)
+                    stack.append(nb)
+        indices = np.concatenate([np.asarray(voxels[v]) for v in component])
+        if len(indices) >= min_points:
+            clusters.append(indices)
+    return clusters
+
+
+def _as_sets(clusters):
+    return sorted(tuple(sorted(int(i) for i in c)) for c in clusters)
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_vectorised_clustering_matches_the_flood_fill(seed):
+    rng = np.random.default_rng(seed)
+    blobs = [rng.normal(rng.uniform(-5, 5, 3), rng.uniform(0.05, 0.6), (rng.integers(5, 300), 3))
+             for _ in range(rng.integers(1, 12))]
+    # Long thin chains exercise many label-propagation rounds.
+    blobs.append(np.column_stack((np.linspace(-8, 8, 400), np.zeros(400), np.full(400, 3.0))))
+    points = np.vstack(blobs)
+    for tolerance, min_points in ((0.15, 1), (0.3, 20), (0.05, 3)):
+        got = cluster_voxel_grid(points, tolerance, min_points)
+        want = _flood_fill_reference(points, tolerance, min_points)
+        assert _as_sets(got) == _as_sets(want)
+        sizes = [len(c) for c in got]
+        assert sizes == sorted(sizes, reverse=True)
+        assert all(np.all(np.diff(c) > 0) for c in got)
+
+
+def test_clustering_edge_cases():
+    assert cluster_voxel_grid(np.zeros((0, 3)), 0.2, 1) == []
+    single = cluster_voxel_grid(np.array([[1.0, 2.0, 3.0]]), 0.2, 1)
+    assert [c.tolist() for c in single] == [[0]]
+    assert cluster_voxel_grid(np.array([[1.0, 2.0, 3.0]]), 0.2, 2) == []
+    # Negative coordinates and voxels touching only at a corner.
+    corner = np.array([[-0.01, -0.01, -0.01], [0.01, 0.01, 0.01], [0.5, 0.5, 0.5]])
+    assert _as_sets(cluster_voxel_grid(corner, 0.1, 1)) == [(0, 1), (2,)]
