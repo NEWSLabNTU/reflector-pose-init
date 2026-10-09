@@ -1,0 +1,89 @@
+# Detector profile: AutoSDV with a Velodyne VLP-16, tracking a handheld board.
+#
+# For board_tracking_node (the coach-board pursuit lab), not for map anchoring.
+# See docs/guides/tracking-mode.md, which has the visibility table this file's
+# centre-height gate is built around.
+#
+# PROVISIONAL. Every value below is from geometry and simulation; none has been
+# checked against a VLP-16 scan of the board. The values that most need a bag
+# are marked UNMEASURED.
+#
+# READ THIS BEFORE THE LAB. A VLP-16 sees +/-15 deg. From a LiDAR 0.30 m off
+# the ground that is 0.30 +/- 0.54 m at 2 m: a board held at chest height
+# (centre 1.0 m, top 1.3 m) is above the top beam until about 3.7 m, so at the
+# lab's 2 m standoff it is not detected at all. Held at knee height (centre
+# about 0.55 m) it is fully in view from about 1.9 m. The centre gate below
+# accepts both, so the same file serves either way of holding it; the guide
+# says which one the lab needs.
+#
+# Which VLP-16? AutoSDV's VLP16.param.yaml decodes with VLP16_hires.yaml, the
+# Puck Hi-Res table (+/-10 deg). If the unit really is a Hi-Res, set
+# `sensor: vlp16_hires`; its narrower fan pushes the chest-height board out to
+# 5.7 m. If it is a standard VLP-16, the driver's calibration is wrong and every
+# elevation it publishes is scaled by 2/3 -- fix the driver first.
+
+board:
+  # Unused by tracking; the loader requires a pose, so the default stands.
+  pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
+  # The 600 mm solid retroreflective square.
+  width: 0.6
+  height: 0.6
+
+detector:
+  # Nebula's VLP16.yaml table: 16 rings, -15 to +15 deg, 2 deg apart.
+  sensor: vlp16
+  # UNMEASURED on this sensor. The VLP-16 reports calibrated reflectivity with
+  # the same convention as the VLP-32C the packaged file was measured on:
+  # 0-100 diffuse, 101-255 retroreflective. 100 is the bottom of that band.
+  intensity_threshold: 100.0
+  min_confidence: 0.6
+
+  runtime:
+    # UNMEASURED: the LiDAR's optical centre above ground, about 0.30 m on a
+    # car 0.262 m tall. It stands in for base_link's height because AutoSDV's
+    # sensor_kit_calibration still puts the LiDAR at z = 0 relative to
+    # base_link (unmeasured too). Height gates read TF z + this value, so the
+    # two must add up to the real sensor height: when the calibration gets a
+    # measured z, set this to 0.0 -- Autoware's base_link is on the ground.
+    base_link_height_above_ground: 0.30
+    range_min: 1.0
+    range_max: 11.0
+    # Ground-relative point band. Low enough for a knee-height board's bottom
+    # edge; the floor itself is horizontal and fails the verticality gate.
+    height_min: 0.1
+    height_max: 1.75
+    # Rings are 2 deg apart: 0.07 m at 2 m, 0.21 m at 6 m. 0.25 m keeps a
+    # board one cluster out to about 7 m.
+    cluster_tolerance: 0.25
+    # A board returns ~50 points at 7 m, ~35 at 10 m.
+    cluster_min_points: 15
+    # Knee (0.55 m) or chest (1.0 m): 0.9 +/- 0.5 m accepts 0.4 to 1.4 m.
+    board_centre_height: 0.9
+    centre_height_tolerance: 0.5
+    extent_tolerance: [0.8, 1.5]
+    # Required on 2 deg rings: past 4 m a 0.6 m board is three or four rings,
+    # and reads 0.4 m tall without the slack.
+    extent_sampling_slack: true
+    planarity_max_thickness: 0.08
+    # A held board leans; 0.35 is about 20 deg off vertical.
+    verticality_max_dot: 0.35
+    # The table is Nebula's own, so the density gate can run.
+    density_max_ratio: 1.4
+    density_check_enabled: true
+
+  map:
+    # Not used: no map is anchored with this profile. The loader requires the
+    # section, so it is the unbounded crop.
+    aabb:
+      min: [-.inf, -.inf, -.inf]
+      max: [.inf, .inf, .inf]
+
+covariance:
+  # Not published by tracking (PoseStamped has none); kept at the defaults.
+  sigma_xy_base: 0.15
+  sigma_xy_per_metre: 0.03
+  sigma_z: 0.10
+  sigma_yaw_base: 0.05
+  sigma_roll_pitch: 0.02
+  safety_factor: 2.0
+  unconstrained_axis_sigma: 1.0

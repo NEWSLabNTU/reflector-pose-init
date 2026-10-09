@@ -6,6 +6,8 @@ exactly the table it was measured with, and the vectorised clustering that
 tracking runs on every scan.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -13,6 +15,9 @@ from reflective_pose_core.config import load_config
 from reflective_pose_core.detector import DetectorParams, cluster_voxel_grid
 from reflective_pose_core.sensors import SENSOR_NAMES, sensor_model
 from reflective_pose_core.vlp32 import elevation_table
+
+DATA = Path(__file__).resolve().parents[1] / "reflective_pose_core" / "data"
+
 
 def test_vlp16_is_the_nebula_table():
     model = sensor_model("vlp16")
@@ -104,6 +109,24 @@ def test_a_file_without_a_sensor_keeps_the_vlp32c(tmp_path, monkeypatch):
     assert params.mean_elevation_step_rad == pytest.approx(0.0225, abs=2e-4)
     assert params.sensor_up == (0.0, 0.0, 1.0)
     assert params.extent_sampling_slack is False
+
+
+@pytest.mark.parametrize(
+    "name, sensor", [("autosdv_vlp16", "vlp16"), ("autosdv_robin_w", "robin_w")]
+)
+def test_autosdv_profiles_load_as_single_scan_tracking_files(name, sensor):
+    config = load_config(str(DATA / f"{name}.yaml"), scan_count=1)
+    params = config.runtime_detector
+    assert config.detector.sensor == sensor
+    assert params.scan_count == 1
+    assert params.board_width == params.board_height == 0.6
+    assert params.range_min == 1.0
+    assert params.range_max >= 10.0
+    assert params.extent_sampling_slack is True
+    # The handheld chest-height board sits inside the centre gate.
+    low = params.board_centre_height - params.centre_height_tolerance
+    high = params.board_centre_height + params.centre_height_tolerance
+    assert low <= 0.7 + 1e-9 and high >= 1.4 - 1e-9
 
 
 # -- clustering ----------------------------------------------------------------

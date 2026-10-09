@@ -1,0 +1,86 @@
+# Detector profile: AutoSDV with a Seyond Robin-W, tracking a handheld board.
+#
+# For board_tracking_node (the coach-board pursuit lab), not for map anchoring:
+# the board is carried by a person, so there is no map pose and no map policy
+# worth tuning. See docs/guides/tracking-mode.md.
+#
+# PROVISIONAL. Every value below is from geometry and simulation; none has been
+# checked against a Robin-W scan of the board. The three that most need a bag
+# are marked UNMEASURED.
+
+board:
+  # Unused by tracking; the loader requires a pose, so the default stands.
+  pose_in_map: [0.0, 0.0, 1.300, 0.0, 0.0, 0.0]
+  # The 600 mm solid retroreflective square.
+  width: 0.6
+  height: 0.6
+
+detector:
+  # The beam model (reflective_pose_core.sensors). Approximate for the
+  # Robin-W: 192 lines uniform over 70 deg, 0.1 deg columns over 120 deg, in
+  # Seyond's native axes (x up, y right, z forward), which is what AutoSDV's
+  # driver publishes with coordinate_mode 0 and what its TF rotates.
+  sensor: robin_w
+  # UNMEASURED. AutoSDV runs the driver in reflectance mode. This assumes
+  # Seyond's reflectance follows the Velodyne convention the packaged file was
+  # measured with (0-100 diffuse, above 100 retroreflective). If a bag of the
+  # board shows it does not, this is the first number to change: too high and
+  # the board never clusters, too low and every white wall passes the gate
+  # (the geometric gates still sort them, at a CPU cost).
+  intensity_threshold: 100.0
+  min_confidence: 0.6
+
+  runtime:
+    # UNMEASURED: the LiDAR's optical centre above ground, about 0.30 m on a
+    # car 0.262 m tall. It stands in for base_link's height because AutoSDV's
+    # sensor_kit_calibration still puts the LiDAR at z = 0 relative to
+    # base_link (unmeasured too). Height gates read TF z + this value, so the
+    # two must add up to the real sensor height: when the calibration gets a
+    # measured z, set this to 0.0 -- Autoware's base_link is on the ground.
+    base_link_height_above_ground: 0.30
+    # The lab's standoff is 2 m and its floor 1 m; below 1 m the board fills
+    # more of the field than the gates expect. 11 m rather than 10 so a board
+    # at 10 m is not cut by its own far edge.
+    range_min: 1.0
+    range_max: 11.0
+    # Ground-relative point band: the board spans 0.4 to 1.7 m at the extremes
+    # of the centre gate below.
+    height_min: 0.35
+    height_max: 1.75
+    # Rows are 0.064 m apart at 10 m, so 0.15 m bridges them everywhere in
+    # range without reaching for the person holding the board.
+    cluster_tolerance: 0.15
+    # A board at 10 m returns ~350 points in the model; a vest at 4 m ~1000.
+    # Size, not count, separates them.
+    cluster_min_points: 40
+    # Handheld, so the centre is wherever an arm puts it: 1.05 +/- 0.35 m
+    # accepts 0.7 to 1.4 m.
+    board_centre_height: 1.05
+    centre_height_tolerance: 0.35
+    extent_tolerance: [0.8, 1.5]
+    extent_sampling_slack: true
+    planarity_max_thickness: 0.08
+    # A held board leans; 0.35 is about 20 deg off vertical.
+    verticality_max_dot: 0.35
+    # Off: the density model is an approximation for this sensor, and the gate
+    # is an upper bound that rejects a real board when the model under-counts.
+    # The confidence term still uses it. Turn it on once a bag fixes the model.
+    density_max_ratio: 1.4
+    density_check_enabled: false
+
+  map:
+    # Not used: no map is anchored with this profile. The loader requires the
+    # section, so it is the unbounded crop.
+    aabb:
+      min: [-.inf, -.inf, -.inf]
+      max: [.inf, .inf, .inf]
+
+covariance:
+  # Not published by tracking (PoseStamped has none); kept at the defaults.
+  sigma_xy_base: 0.15
+  sigma_xy_per_metre: 0.03
+  sigma_z: 0.10
+  sigma_yaw_base: 0.05
+  sigma_roll_pitch: 0.02
+  safety_factor: 2.0
+  unconstrained_axis_sigma: 1.0
