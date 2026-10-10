@@ -32,6 +32,7 @@ setup(
             'board_tracking_node = reflective_pose_ros.tracking_node:main',
             'board_scene_publisher = reflective_pose_ros.scene_publisher:main',
             'anchor_debug_viewer = reflective_pose_ros.anchor_debug_viewer:main',
+            'board_tracking_report = reflective_pose_ros.tracking_report_cli:main',
         ],
     },
 )

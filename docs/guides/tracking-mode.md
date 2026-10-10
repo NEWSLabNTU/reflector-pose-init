@@ -248,6 +248,22 @@ ros2 bag play <bag>
 On a replay the scans carry the recording's stamps, so `scan_age_ms_*` is
 meaningless; the rates and `processing_ms_*` are not.
 
+Or replay it offline, scan by scan, without a running graph:
+
+```bash
+ros2 run reflective_pose_ros board_tracking_report <bag> --lidar vlp16     # or robin-w
+ros2 run reflective_pose_ros board_tracking_report <bag> --profile my.yaml --topic /points
+```
+
+`board_tracking_report` (logic in `reflective_pose_core.tracking_report`)
+prints the detection rate per range bin with the gate behind each miss, the
+detection time per scan, the board's intensity against the background with a
+suggested `intensity_threshold` (the middle of the gap between the two), and
+the detected centre height against the centre-height gate. A static-board bag
+is the input it is built for: a miss borrows the range of the nearest
+detection in time. `--synthesize OUT --lidar vlp16 --centre-height 0.55`
+writes such a bag from `reflective_pose_sim`, which is how the tool is tested.
+
 ## Known limits
 
 - **One board in view.** Two candidates in one scan is `AMBIGUOUS` and
