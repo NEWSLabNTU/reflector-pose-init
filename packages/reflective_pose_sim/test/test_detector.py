@@ -266,3 +266,74 @@ def test_runtime_height_offset_does_not_change_range_or_pose_geometry():
         without_offset.detection.range_m
     )
     assert np.allclose(with_offset.detection.centre, without_offset.detection.centre)
+
+
+# The golf cart's basement geometry: the VLP-32C 1.966 m above base_link,
+# base_link 0.265 m above the floor, and a 0.6 m board from 1.0 to 1.6 m.
+CART_SENSOR_HEIGHT = 1.966 + 0.265
+CART_BOARD_CENTRE = 1.3
+
+
+def _cart_params(**overrides):
+    values = dict(
+        board_width=0.6,
+        board_height=0.6,
+        board_centre_height=CART_BOARD_CENTRE,
+        range_max=18.0,
+        height_min=0.5,
+        height_max=1.65,
+        extent_tolerance=(0.8, 1.5),
+        extent_sampling_slack=True,
+    )
+    values.update(overrides)
+    return DetectorParams(**values)
+
+
+def _cart_scan(range_m, board_height=0.6):
+    scene = scenes.make_room(sensor_height=CART_SENSOR_HEIGHT)
+    scene.add(
+        scenes.place_board(
+            range_m=range_m,
+            centre_height=CART_BOARD_CENTRE,
+            sensor_height=CART_SENSOR_HEIGHT,
+            width=0.6,
+            height=board_height,
+        )
+    )
+    return vlp32_sim.simulate(scene, vlp32_sim.SimParams(seed=1))
+
+
+@pytest.mark.parametrize("range_m", [8.0, 12.5, 17.8])
+def test_extent_slack_admits_a_ring_quantized_board_at_cart_ranges(range_m):
+    """On the cart at 12.5 m the board's rings span 1.08 to 1.51 m: 0.43 m of a
+    0.6 m board, under the 0.48 m floor of extent_tolerance 0.8. The slack is
+    what lets the board through at the lane's ranges."""
+    scan = _cart_scan(range_m)
+    result = detect_board(
+        scan.points,
+        scan.intensity,
+        scenes.transform_base_sensor(CART_SENSOR_HEIGHT),
+        _cart_params(),
+    )
+    assert result.status is Status.OK, [r.reason for r in result.rejections]
+
+
+@pytest.mark.parametrize("range_m", [12.5, 17.8])
+def test_extent_slack_follows_the_local_ring_gap_not_the_mean(range_m):
+    """A 0.25 m strip is not the 0.6 m board. At these ranges the rings at the
+    strip's edges are 0.33 to 0.67 deg apart, so the slack is ~0.2 m; the
+    table's MEAN gap (1.29 deg) would forgive 0.56 m at 12.5 m and admit the
+    strip, which is no lower bound at all.
+
+    Not 8 m: there the strip falls on two rings with a 1.59 deg gap below
+    them, so a 0.25 m strip and a 0.6 m board really are indistinguishable by
+    height, and the slack is right to say so."""
+    scan = _cart_scan(range_m, board_height=0.25)
+    result = detect_board(
+        scan.points,
+        scan.intensity,
+        scenes.transform_base_sensor(CART_SENSOR_HEIGHT),
+        _cart_params(),
+    )
+    assert result.status is Status.NO_CANDIDATE
+    assert any(r.reason == "bad_height" for r in result.rejections)

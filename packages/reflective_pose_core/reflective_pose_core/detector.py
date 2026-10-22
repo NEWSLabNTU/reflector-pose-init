@@ -505,6 +505,43 @@ def confidence_from_terms(terms: Dict[str, float]) -> float:
     return float(sum(CONFIDENCE_TERMS[name] * value for name, value in terms.items()) / total)
 
 
+def _vertical_sampling_slack(
+    points: np.ndarray, params: DetectorParams, sample_range: float
+) -> float:
+    """How much of the object's height the rings can miss, at its two edges.
+
+    The measured height runs from the lowest ring that hits the object to the
+    highest, so each edge can fall short by up to the gap to the next ring out.
+    Those gaps are read from the elevation table at the cluster's own edges:
+    on the VLP-32C they run from 0.33 to 9.36 deg, so the table's mean (1.29
+    deg) forgives 0.56 m at 12.5 m where the rings on a board 1.0 to 1.6 m
+    above the floor are 0.07 m apart, and no longer bounds the height at all.
+
+    Falls back to the mean step without a table, and with a viewpoint set: a
+    merged map has no sensor whose rings the points could be measured against.
+    """
+    mean_slack = 2.0 * sample_range * params.mean_elevation_step_rad
+    if params.elevation_table_rad is None or params.viewpoint is not None:
+        return mean_slack
+
+    table = np.sort(np.asarray(params.elevation_table_rad, dtype=np.float64))
+    up = np.asarray(params.sensor_up, dtype=np.float64)
+    up = up / max(np.linalg.norm(up), 1e-12)
+    vertical = points @ up
+    horizontal = np.linalg.norm(points - np.outer(vertical, up), axis=1)
+    elevations = np.arctan2(vertical, horizontal)
+
+    lowest = int(np.argmin(np.abs(table - elevations.min())))
+    highest = int(np.argmin(np.abs(table - elevations.max())))
+    below = table[lowest] - table[lowest - 1] if lowest > 0 else params.mean_elevation_step_rad
+    above = (
+        table[highest + 1] - table[highest]
+        if highest + 1 < len(table)
+        else params.mean_elevation_step_rad
+    )
+    return float(sample_range * (below + above))
+
+
 def _evaluate_cluster(
     points: np.ndarray,
     params: DetectorParams,
@@ -550,7 +587,7 @@ def _evaluate_cluster(
     if params.extent_sampling_slack:
         sample_range = float(np.linalg.norm(centroid - sensor_origin))
         slack_w = 2.0 * sample_range * params.azimuth_step_rad
-        slack_h = 2.0 * sample_range * params.mean_elevation_step_rad
+        slack_h = _vertical_sampling_slack(points, params, sample_range)
     if not (lo * params.board_width - slack_w <= width <= hi * params.board_width):
         return None, Rejection(
             "bad_width", centroid, len(points), f"{width:.2f} m"
