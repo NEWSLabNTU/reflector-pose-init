@@ -97,6 +97,7 @@ def test_pose_accumulated_while_moving_is_dropped(node):
 
 
 def test_stopped_vehicle_initializes_with_the_detector_pose(node):
+    node._on_matcher_map(b"")
     node._on_velocity(velocity(0.0))
     node._on_board_pose(board_pose(node))
 
@@ -114,6 +115,7 @@ def test_stopped_vehicle_initializes_with_the_detector_pose(node):
 def test_budget_is_spent_then_failure_is_terminal(node):
     node._params.max_attempts = 3
     node._params.fallback_to_user_defined_pose = False
+    node._on_matcher_map(b"")
 
     for _ in range(3):
         node._on_board_pose(board_pose(node))
@@ -129,6 +131,7 @@ def test_budget_is_spent_then_failure_is_terminal(node):
 def test_fallback_sends_an_empty_request_when_enabled(node):
     node._params.max_attempts = 2
     node._params.fallback_to_user_defined_pose = True
+    node._on_matcher_map(b"")
 
     for _ in range(2):
         node._on_board_pose(board_pose(node))
@@ -138,3 +141,55 @@ def test_fallback_sends_an_empty_request_when_enabled(node):
     fallback = node._client.requests[-1]
     assert fallback.pose_with_covariance == []
     assert fallback.method == 0
+
+
+def fail_attempts(node, count):
+    for _ in range(count):
+        node._on_board_pose(board_pose(node))
+        node._attempt_failed("initialize service rejected")
+
+
+def test_failures_before_the_matcher_has_a_map_are_free(node):
+    """L8: a cart parked at the board while the stack boots.
+
+    The detector fires about once a second from the first scan, and every
+    align fails until the map reaches the matcher, 8.6 s after playback on
+    2026-10-02. Those failures say nothing about the board, so they must not
+    spend the budget: the call still goes out (it is what asks for the tiles),
+    and the first attempt that counts is the first one after the map.
+    """
+    node._params.max_attempts = 3
+
+    fail_attempts(node, 10)
+    assert node._state is State.WAIT_POSE
+    assert node._attempts == 0
+    assert len(node._client.requests) == 10
+
+    node._on_matcher_map(b"")
+    fail_attempts(node, 3)
+    assert node._attempts == 3
+    assert node._state is State.FAILED
+
+
+def test_a_failure_counts_by_what_was_known_when_the_call_went_out(node):
+    """The tile reply can land between the call and its failed response.
+
+    That align ran without a map, so it is free even though the map is known
+    by the time the failure is read.
+    """
+    node._params.max_attempts = 1
+    node._on_board_pose(board_pose(node))
+    node._on_matcher_map(b"")
+    node._attempt_failed("initialize service rejected")
+
+    assert node._attempts == 0
+    assert node._state is State.WAIT_POSE
+
+
+def test_counting_from_the_first_failure_is_still_available(node):
+    node._params.max_attempts = 2
+    node._params.ignore_failures_before_map = False
+
+    fail_attempts(node, 2)
+    assert node._attempts == 2
+    assert node._state is State.FAILED

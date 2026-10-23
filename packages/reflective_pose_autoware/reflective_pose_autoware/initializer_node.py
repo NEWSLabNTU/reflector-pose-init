@@ -39,6 +39,18 @@ can be stacked without deskewing. The accumulation now lives on the other side
 of the topic, so the same protection is applied here by *stamp*: a board pose
 stamped before the last time the vehicle was seen moving was accumulated across
 that motion, and is dropped rather than initialized from.
+
+Failures before the scan matcher has a map are free
+---------------------------------------------------
+A cart parked at the board while the stack boots is detected within a second
+of the first scan, long before the map reaches the scan matcher (8.6 s after
+playback in the 2026-10-02 replay). Every align until then fails with "No map
+loaded", and five detections a second apart used to spend the whole budget
+before the map arrived. Those failures say nothing about the board, so an
+attempt counts only if the matcher had published its loaded map when the call
+went out. The call itself still goes out: cuda_ndt's align is what asks the
+map loader for the tiles around the pose. ``ignore_failures_before_map``
+turns this off.
 """
 
 from dataclasses import dataclass
@@ -54,6 +66,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
+from sensor_msgs.msg import PointCloud2
 from autoware_localization_msgs.srv import InitializeLocalization
 
 #: Where ``reflective_pose_ros``'s ``~/board_pose`` lands when its node is named
@@ -64,6 +77,10 @@ from autoware_localization_msgs.srv import InitializeLocalization
 DEFAULT_BOARD_POSE_TOPIC = "/localization/board_detector/board_pose"
 
 VELOCITY_TOPIC = "/vehicle/status/velocity_status"
+
+#: The scan matcher publishes the map it holds here, once it holds one: both
+#: Autoware's ndt_scan_matcher and cuda_ndt. Remap it for another namespace.
+MATCHER_MAP_TOPIC = "/localization/pose_estimator/debug/loaded_pointcloud_map"
 
 
 @dataclass
@@ -86,6 +103,9 @@ class Policy:
     # processes, so an attempt is one pose acted on: a detector that never
     # detects spends no attempts and the fallback never runs. This bounds it.
     pose_wait_timeout: float = 0.0
+    # Failed attempts made before the scan matcher has published a map do not
+    # count against max_attempts: the align could not have succeeded.
+    ignore_failures_before_map: bool = True
 
 
 def declare_policy(node: Node) -> Policy:
@@ -114,6 +134,11 @@ class BoardPoseInitializer(Node):
 
         self._state = State.WAIT_POSE
         self._attempts = 0
+        self._matcher_has_map = False
+        # Whether the attempt in flight counts against the budget, fixed when
+        # the call goes out: the map can arrive between the call and its
+        # failed response, and that align still ran without it.
+        self._attempt_counts = True
 
         # Detection and the service call are two processes now, so an attempt is
         # one pose acted on: a detector that never detects spends no attempts
@@ -159,6 +184,17 @@ class BoardPoseInitializer(Node):
             sensor_qos,
         )
 
+        # Reliable and volatile, which matches both publishers: upstream's is
+        # transient_local, cuda_ndt's is volatile, and a transient_local
+        # subscription would not connect to the latter. Raw, because only the
+        # arrival matters and the map can be millions of points; dropped after
+        # the first message.
+        self._matcher_map_sub = None
+        if self._params.ignore_failures_before_map:
+            self._matcher_map_sub = self.create_subscription(
+                PointCloud2, MATCHER_MAP_TOPIC, self._on_matcher_map, 1, raw=True
+            )
+
         self._client = self.create_client(
             InitializeLocalization, self._params.initialize_service
         )
@@ -175,6 +211,15 @@ class BoardPoseInitializer(Node):
         self._speed = abs(float(msg.longitudinal_velocity))
         if self._speed > self._params.max_speed_for_init:
             self._last_moving_time = self.get_clock().now()
+
+    def _on_matcher_map(self, _serialized: bytes):
+        if self._matcher_has_map:
+            return
+        self._matcher_has_map = True
+        self.get_logger().info("the scan matcher has a map: failed attempts count from now")
+        if self._matcher_map_sub is not None:
+            self.destroy_subscription(self._matcher_map_sub)
+            self._matcher_map_sub = None
 
     def _on_board_pose(self, msg: PoseWithCovarianceStamped):
         if self._state in (State.DONE, State.FAILED, State.CALL_SERVICE):
@@ -193,12 +238,18 @@ class BoardPoseInitializer(Node):
             self._note("board pose was accumulated while the vehicle moved: ignored")
             return
 
-        self._attempts += 1
+        self._attempt_counts = (
+            self._matcher_has_map or not self._params.ignore_failures_before_map
+        )
+        if self._attempt_counts:
+            self._attempts += 1
+            attempt = "attempt %d/%d" % (self._attempts, self._params.max_attempts)
+        else:
+            attempt = "attempt before the scan matcher has a map, not counted"
         self.get_logger().info(
-            "attempt %d/%d: initializing from board pose at x=%.3f y=%.3f z=%.3f"
+            "%s: initializing from board pose at x=%.3f y=%.3f z=%.3f"
             % (
-                self._attempts,
-                self._params.max_attempts,
+                attempt,
                 msg.pose.pose.position.x,
                 msg.pose.pose.position.y,
                 msg.pose.pose.position.z,
@@ -290,6 +341,12 @@ class BoardPoseInitializer(Node):
         A failed attempt therefore returns to waiting for the detector's next
         publication until the budget is gone.
         """
+        if not self._attempt_counts:
+            reason = f"{reason} (the scan matcher has no map yet; not counted)"
+            self.get_logger().warn(reason)
+            self._last_reason = reason
+            self._state = State.WAIT_POSE
+            return
         self.get_logger().warn(f"attempt {self._attempts}: {reason}")
         self._last_reason = reason
         if self._attempts >= self._params.max_attempts:
@@ -350,6 +407,7 @@ class BoardPoseInitializer(Node):
         status.values = [
             KeyValue(key="state", value=self._state.value),
             KeyValue(key="attempts", value=str(self._attempts)),
+            KeyValue(key="matcher_has_map", value=str(self._matcher_has_map)),
         ]
 
         array = DiagnosticArray()

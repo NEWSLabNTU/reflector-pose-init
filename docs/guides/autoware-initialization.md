@@ -91,6 +91,7 @@ The initializer's ROS parameter file controls the handoff, not the detector:
     max_attempts: 5
     fallback_to_user_defined_pose: false
     pose_wait_timeout: 0.0
+    ignore_failures_before_map: true
 ```
 
 Keep `fallback_to_user_defined_pose` disabled unless sending the configured

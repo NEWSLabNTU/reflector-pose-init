@@ -20,3 +20,10 @@
     # pose acted on: a detector that never detects spends no attempts and the
     # fallback never runs. This bounds that case.
     pose_wait_timeout: 0.0
+
+    # Failed attempts made before the scan matcher has published its loaded
+    # map (/localization/pose_estimator/debug/loaded_pointcloud_map) do not
+    # count against max_attempts. A cart parked at the board while the stack
+    # boots is detected long before the map reaches the matcher, and every
+    # align until then fails for that reason alone.
+    ignore_failures_before_map: true

@@ -26,6 +26,7 @@
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>diagnostic_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>reflective_pose_core</depend>
   <!-- For the launch file, which brings up the detector node beside this one.
        Nothing in this package imports it. -->

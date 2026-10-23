@@ -334,6 +334,7 @@ Same shape, same test.
 | `max_attempts` | `5` | failed attempts before the fallback policy runs |
 | `fallback_to_user_defined_pose` | `false` | send an empty request when attempts run out, so Autoware uses its own user-defined pose |
 | `pose_wait_timeout` | `0.0` | seconds to wait for a pose before spending an attempt; `0` disables |
+| `ignore_failures_before_map` | `true` | a failed attempt made before the scan matcher published its loaded map does not count against `max_attempts` |
 
 Keep `fallback_to_user_defined_pose` false unless there is an explicit, reviewed
 fallback policy. A silent fallback to a fixed pose turns a detector failure into
@@ -342,6 +343,17 @@ a mislocalization report three weeks later.
 `pose_wait_timeout` exists because detection and the service call are separate
 processes: an attempt is one *pose acted on*, so a detector that never detects
 spends no attempts and the fallback never runs.
+
+`ignore_failures_before_map` exists because a vehicle parked at the board while
+the stack boots is detected about a second after the first scan, and the map
+can reach the scan matcher several seconds later. Every align until then fails
+for that reason alone, and five of them used to end initialization for good.
+The node watches `/localization/pose_estimator/debug/loaded_pointcloud_map`
+(published by both Autoware's `ndt_scan_matcher` and cuda_ndt once they hold a
+map) and counts an attempt only if the map had been seen when the call went
+out. The calls still go out: cuda_ndt's align is what requests the tiles. A
+stack whose matcher does not publish that topic never counts a failure, so turn
+this off there.
 
 ## anchor-map-to-board flags
 
