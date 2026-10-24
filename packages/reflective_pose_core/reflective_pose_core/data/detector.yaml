@@ -23,6 +23,16 @@ detector:
   azimuth_step_rad: 0.0035
   min_confidence: 0.6
 
+  # Where a runtime detection may be published as a seed pose from: its own
+  # range [m], bearing from base_link [deg] and aspect off the board's normal
+  # [deg]. Open when left out, as here; a site with a known false reflector
+  # sets it in its own file. See docs/configuration.md, detector.seed_zone.
+  # seed_zone:
+  #   range_min: 4.0
+  #   range_max: 17.0
+  #   bearing_max_deg: 60.0
+  #   aspect_max_deg: 35.0
+
   runtime:
     # Positive offset: z_ground = z_base_link + this value. The real
     # base_link <- sensor TF remains unchanged for range and pose calculations.

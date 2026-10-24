@@ -58,6 +58,7 @@ from visualization_msgs.msg import MarkerArray
 
 from reflective_pose_core.config import load_config
 from reflective_pose_core.detector import Status, detect_board
+from reflective_pose_core.seed_zone import view_geometry
 from reflective_pose_core.geometry import (
     CovarianceParams,
     covariance_from_detection,
@@ -75,7 +76,7 @@ from .debug_viz import (
     detection_points_cloud,
     rejection_marker_array,
 )
-from .decision import Verdict, judge
+from .decision import Verdict, gate_seed_zone, judge
 
 
 @dataclass
@@ -160,6 +161,10 @@ class BoardDetectorNode(Node):
         # The gate on what gets published. Part of the detector file, beside
         # the gates that decide what counts as a candidate at all.
         self._min_confidence = float(self._detector_params.min_confidence)
+        # Where a detection may be published from: its own range, bearing and
+        # aspect (reflective_pose_core.seed_zone). Open unless the detector
+        # file sets detector.seed_zone.
+        self._seed_zone = self._config.detector.seed_zone
         self._covariance_params = covariance_params_from_config(self._config)
         self._board_pose_in_map = self._board_transform()
         self._accumulate_scans = int(self._params.accumulate_scans)
@@ -223,6 +228,13 @@ class BoardDetectorNode(Node):
             f"board {self._config.board.width:.2f} x {self._config.board.height:.2f} m "
             f"at {list(self._config.board.pose_in_map)}"
         )
+        if self._seed_zone.enabled:
+            zone = self._seed_zone
+            self.get_logger().info(
+                f"seed zone: range {zone.range_min:g}-{zone.range_max:g} m, "
+                f"bearing within {zone.bearing_max_deg:g} deg, "
+                f"aspect within {zone.aspect_max_deg:g} deg"
+            )
 
     def _board_transform(self) -> np.ndarray:
         """The board's pose in the map, as a 4x4."""
@@ -367,6 +379,12 @@ class BoardDetectorNode(Node):
         self._publish_outline(result, frame_id)
 
         verdict = judge(result, self._min_confidence)
+        if result.status is Status.OK and result.detection is not None:
+            verdict = gate_seed_zone(
+                verdict,
+                view_geometry(result.detection, self._transform_base_sensor),
+                self._seed_zone,
+            )
         self._last_verdict = verdict
         if not verdict.publish:
             # No attempt budget here: the node keeps looking, and a consumer

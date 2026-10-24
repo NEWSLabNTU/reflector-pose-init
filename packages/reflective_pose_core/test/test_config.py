@@ -314,3 +314,67 @@ def test_min_confidence_is_a_shared_detector_key(tmp_path, monkeypatch):
     document = yaml.safe_load(open(default_config_path(), encoding="utf-8"))
     assert "min_confidence" in document["detector"]
     assert load_config().runtime_detector.min_confidence == DetectorParams().min_confidence
+
+
+# -- seed_zone (golf-cart Phase 8, L6) -------------------------------------------
+
+
+def _with_seed_zone(path, block):
+    write_config(path)
+    text = path.read_text(encoding="utf-8").replace(
+        "  runtime:\n", block + "  runtime:\n", 1
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def test_seed_zone_is_open_when_the_file_does_not_set_it(tmp_path):
+    config_file = tmp_path / "detector.yaml"
+    write_config(config_file)
+
+    zone = load_config(str(config_file)).detector.seed_zone
+
+    assert not zone.enabled
+
+
+def test_seed_zone_is_read_from_the_detector_section(tmp_path):
+    config_file = tmp_path / "detector.yaml"
+    _with_seed_zone(
+        config_file,
+        "  seed_zone:\n"
+        "    range_min: 4.0\n"
+        "    range_max: 17.0\n"
+        "    bearing_max_deg: 60.0\n"
+        "    aspect_max_deg: 35.0\n",
+    )
+
+    zone = load_config(str(config_file)).detector.seed_zone
+
+    assert (zone.range_min, zone.range_max) == (4.0, 17.0)
+    assert (zone.bearing_max_deg, zone.aspect_max_deg) == (60.0, 35.0)
+    assert zone.enabled
+
+
+def test_seed_zone_keys_left_out_stay_open(tmp_path):
+    config_file = tmp_path / "detector.yaml"
+    _with_seed_zone(config_file, "  seed_zone:\n    aspect_max_deg: 35.0\n")
+
+    zone = load_config(str(config_file)).detector.seed_zone
+
+    assert zone.aspect_max_deg == 35.0
+    assert zone.range_max == float("inf")
+
+
+def test_seed_zone_rejects_unknown_keys(tmp_path):
+    config_file = tmp_path / "detector.yaml"
+    _with_seed_zone(config_file, "  seed_zone:\n    max_range: 17.0\n")
+
+    with pytest.raises(ValueError, match="seed_zone"):
+        load_config(str(config_file))
+
+
+def test_seed_zone_rejects_nonsense_bounds(tmp_path):
+    config_file = tmp_path / "detector.yaml"
+    _with_seed_zone(config_file, "  seed_zone:\n    range_min: 18.0\n    range_max: 17.0\n")
+
+    with pytest.raises(ValueError, match="seed_zone"):
+        load_config(str(config_file))

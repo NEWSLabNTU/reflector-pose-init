@@ -31,6 +31,7 @@ from typing import List, Tuple
 from diagnostic_msgs.msg import DiagnosticStatus
 
 from reflective_pose_core.detector import BoardDetection, DetectResult, Status
+from reflective_pose_core.seed_zone import SeedZone, ViewGeometry
 
 
 @dataclass
@@ -152,4 +153,44 @@ def judge(result: DetectResult, min_confidence: float) -> Verdict:
             f"confidence {detection.confidence:.2f}"
         ),
         values=values + [("min_confidence", f"{min_confidence:.2f}")],
+    )
+
+
+def gate_seed_zone(verdict: Verdict, view: ViewGeometry, zone: SeedZone) -> Verdict:
+    """Hold a publishable verdict to the seed zone (golf-cart Phase 8, L6).
+
+    Applied after ``judge``, and only by the seed node: a lone, confident
+    survivor is still not published as a vehicle pose unless its own range,
+    bearing and aspect lie inside ``zone``. A planar retroreflector of the
+    board's size can sit anywhere in a building; the measured zone is where the
+    real board is always detected and the known false ones are not. Like the
+    other suppressions it is not terminal, and the message names every bound
+    the detection broke. The view is added to the diagnostic either way.
+    """
+    values = list(verdict.values) + [
+        ("bearing_deg", f"{view.bearing_deg:+.1f}"),
+        ("aspect_deg", f"{view.aspect_deg:+.1f}"),
+    ]
+    if zone.enabled:
+        values.append(
+            (
+                "seed_zone",
+                f"{zone.range_min:g}-{zone.range_max:g} m, "
+                f"bearing {zone.bearing_max_deg:g} deg, aspect {zone.aspect_max_deg:g} deg",
+            )
+        )
+    if not verdict.publish:
+        return Verdict(verdict.publish, verdict.level, verdict.message, values, verdict.terminal)
+    reason = zone.rejection(view)
+    if reason is None:
+        return Verdict(True, verdict.level, verdict.message, values, verdict.terminal)
+    return Verdict(
+        publish=False,
+        level=DiagnosticStatus.WARN,
+        message=(
+            f"board at {view.range_m:.1f} m, bearing {view.bearing_deg:+.1f} deg, "
+            f"aspect {view.aspect_deg:+.1f} deg is outside the seed zone ({reason}); "
+            "nothing published"
+        ),
+        values=values,
     )

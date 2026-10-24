@@ -145,3 +145,71 @@ def test_a_low_confidence_detection_still_draws_its_outline(node):
     node._on_cloud(cloud_of(scenes.board_scene(range_m=5.0)[0]))
     assert node._published == []
     assert _namespaces(node._outlines[-1]) == {"nominal", "measured"}
+
+
+# -- the seed zone (golf-cart Phase 8, L6) -------------------------------------
+#
+# A detection that passes every shape gate is published only when its own
+# range, bearing and aspect lie inside the detector file's seed_zone; outside,
+# the batch is a WARN that names the bound it broke, and the next batch runs.
+
+from reflective_pose_core.seed_zone import SeedZone  # noqa: E402
+
+ZONE = SeedZone(range_min=4.0, range_max=17.0, bearing_max_deg=60.0, aspect_max_deg=20.0)
+
+
+def test_a_detection_inside_the_zone_is_published_with_its_geometry(node):
+    node._seed_zone = ZONE
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=6.0)[0]))
+
+    assert len(node._published) == 1
+    status, values = last_diagnostic(node)
+    assert status.level == DiagnosticStatus.OK
+    assert abs(float(values["bearing_deg"])) < 5.0
+    assert abs(float(values["aspect_deg"])) < 5.0
+
+
+def test_a_detection_seen_too_obliquely_is_not_published(node):
+    node._seed_zone = ZONE
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=6.0, yaw_deg=35.0)[0]))
+
+    assert node._published == []
+    status, values = last_diagnostic(node)
+    assert status.level == DiagnosticStatus.WARN
+    assert "outside the seed zone" in status.message
+    assert "aspect" in status.message
+    assert abs(float(values["aspect_deg"])) > 20.0
+    # Still a detection: the outline stays, as for low confidence.
+    assert _namespaces(node._outlines[-1]) == {"nominal", "measured"}
+
+
+def test_a_detection_closer_than_the_zone_is_not_published(node):
+    node._seed_zone = ZONE
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=3.5)[0]))
+
+    assert node._published == []
+    status, _ = last_diagnostic(node)
+    assert "range" in status.message
+
+
+def test_a_detection_off_to_the_side_is_not_published(node):
+    node._seed_zone = ZONE
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=6.0, bearing_deg=75.0)[0]))
+
+    assert node._published == []
+    status, _ = last_diagnostic(node)
+    assert "bearing" in status.message
+
+
+def test_without_a_zone_the_same_oblique_detection_is_published(node):
+    node._on_cloud(cloud_of(scenes.board_scene(range_m=6.0, yaw_deg=35.0)[0]))
+
+    assert len(node._published) == 1
+
+
+def test_the_seed_zone_comes_from_the_detector_file():
+    node = BoardDetectorNode()
+    try:
+        assert node._seed_zone == node._config.detector.seed_zone
+    finally:
+        node.destroy_node()

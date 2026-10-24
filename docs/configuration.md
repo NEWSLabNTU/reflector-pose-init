@@ -257,6 +257,39 @@ while a board with one edge hidden scores 0.55. The replay bag's stationary
 detections score 0.85 to 0.89. The offline tool prints the same number, so a
 map anchored to a weak detection is visible as such.
 
+### detector.seed_zone
+
+Where a runtime detection may be published as a seed pose from. Read by
+`board_detector_node` only: the tracking node wants the board from anywhere,
+and anchoring has no viewpoint. Optional; every key left out is open, so a file
+without the section publishes exactly what it did before.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `range_min` / `range_max` | `0.0` / `.inf` | sensor to board centre, 3-D, metres, inclusive |
+| `bearing_max_deg` | `180.0` | the board centre's direction from `base_link`, absolute, 0 dead ahead |
+| `aspect_max_deg` | `90.0` | the sensor's direction seen from the board, absolute, 0 on its normal |
+
+Each detection is judged on its own geometry, after `min_confidence`: range is
+`BoardDetection.range_m`, bearing comes from the centre through the
+`base_link <- sensor` TF, aspect from the fitted normal. The definitions are
+those of the golf-cart repository's `scripts/localization/board_range_report.py`,
+so a zone read off its tables means the same thing here. A detection outside
+is a WARN, `... is outside the seed zone (aspect +60.2 deg beyond 35 deg);
+nothing published`, logged and on `/diagnostics`, and the next batch is judged
+afresh. `/diagnostics` carries `bearing_deg` and `aspect_deg` for every
+detection, in or out.
+
+Why it exists: every gate above asks whether a cluster *looks like* the board,
+and a planar retroreflector of the same size can sit anywhere in a building.
+The golf cart's Ming-Da site has one at the end of a box wall, detected at 3-5 m
+with confidence 0.62-0.86 and seen at 58-62 deg of aspect, while the real board
+is detected in every batch from 4-17 m, within 60 deg of heading and 35 deg of
+aspect (golf-cart Phase 8, L10 and L6). The zone is per site and belongs in
+the scenario's detector file. It is narrower than the range gate on purpose:
+`range_max` decides which points are clustered, the zone decides which
+detections are trusted enough to act on.
+
 ### covariance
 
 Read by `reflective_pose_ros`, which computes the covariance: it is a property

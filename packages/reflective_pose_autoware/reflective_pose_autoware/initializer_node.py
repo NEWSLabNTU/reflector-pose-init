@@ -40,6 +40,17 @@ of the topic, so the same protection is applied here by *stamp*: a board pose
 stamped before the last time the vehicle was seen moving was accumulated across
 that motion, and is dropped rather than initialized from.
 
+Where the board was seen from is not decided here
+-------------------------------------------------
+A pose reaches this node only if its detection lay inside the detector file's
+``detector.seed_zone``: range, bearing and aspect, each detection judged on
+its own (golf-cart Phase 8, L6). That gate is in ``board_detector_node``,
+not here, because this node receives only the composed vehicle pose: judging
+the view would need the board's map pose and the sensor's TF, which are the
+detector's, and copying them here is how the two would drift apart. Nothing
+here re-initializes on its own either: after one success every later pose is
+ignored, and a re-initialization stays the operator's request.
+
 Failures before the scan matcher has a map are free
 ---------------------------------------------------
 A cart parked at the board while the stack boots is detected within a second

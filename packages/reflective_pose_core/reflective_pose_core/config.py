@@ -4,7 +4,8 @@ The detector file has three sections, read by the runtime node and the offline
 anchoring tool:
 
 ``board:``      the board's map pose and face dimensions
-``detector:``   shared sensor settings plus independent runtime/map policies
+``detector:``   shared sensor settings plus independent runtime/map policies,
+                and ``seed_zone``, where a runtime detection may seed from
 ``covariance:`` the covariance attached to a published guess
 
 Runtime and map clouds deliberately do not share a flat set of gates. Runtime
@@ -27,6 +28,7 @@ import yaml
 from .anchor import AnchorParams
 from .detector import Aabb, DetectorParams
 from .geometry import CovarianceParams
+from .seed_zone import SeedZone
 from .sensors import DEFAULT_SENSOR, SensorModel, sensor_model
 
 CONFIG_ENV_VAR = "REFLECTIVE_POSE_CONFIG"
@@ -129,6 +131,11 @@ class DetectorConfig:
     min_confidence: float = 0.6
     runtime: RuntimeDetectionPolicy = field(default_factory=RuntimeDetectionPolicy)
     map_policy: MapDetectionPolicy = field(default_factory=_default_map_policy)
+    # Where a runtime detection may be published as a seed pose from
+    # (reflective_pose_core.seed_zone). Open unless the file sets it. Read by
+    # board_detector_node only: tracking wants the board from anywhere, and a
+    # merged map has no viewpoint to measure it from.
+    seed_zone: SeedZone = field(default_factory=SeedZone)
 
     @property
     def map(self) -> MapDetectionPolicy:
@@ -283,6 +290,16 @@ def load_config(path: Optional[str] = None, *, scan_count: Optional[int] = None)
         resolved, "detector.runtime", detector_values.pop("runtime", None)
     )
     map_values = _mapping(resolved, "detector.map", detector_values.pop("map", None))
+    seed_zone_values = _mapping(
+        resolved, "detector.seed_zone", detector_values.pop("seed_zone", None)
+    )
+    _reject_unknown(resolved, "detector.seed_zone", seed_zone_values, SeedZone)
+    try:
+        seed_zone = SeedZone(
+            **{name: float(value) for name, value in seed_zone_values.items()}
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{resolved}: detector.seed_zone: {error}") from error
     common_names = {
         "intensity_threshold",
         "sensor",
@@ -335,6 +352,7 @@ def load_config(path: Optional[str] = None, *, scan_count: Optional[int] = None)
         **_select(detector_values, DetectorConfig),
         runtime=runtime,
         map_policy=map_policy,
+        seed_zone=seed_zone,
     )
     try:
         detector.sensor_model
