@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "reflective_pose_cli"
 version = "0.1.0"
 description = "Offline terminal tools for the reflective board detector, without ROS"
-requires-python = ">=3.8"
+# No requires-python. setuptools >= 61 reads this [project] table during
+# colcon's setup.py introspection and stores requires-python as a
+# SpecifierSet, whose repr (<SpecifierSet('>=3.8')>) colcon-python-setup-py
+# then fails to ast.literal_eval: "invalid syntax", and the package does
+# not build. Every supported target runs Python 3.10 anyway.
 license = { text = "Apache-2.0" }
 maintainers = [{ name = "Golf Cart Team", email = "dev@golfcart.org" }]
 dependencies = [
