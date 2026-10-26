@@ -27,3 +27,16 @@
     # boots is detected long before the map reaches the matcher, and every
     # align until then fails for that reason alone.
     ignore_failures_before_map: true
+
+    # Readiness: act on a board pose only when the stack can take one. Autoware's
+    # pose initializer refuses while it has no wheel speed ("The vehicle is not
+    # stopped") and while NDT has no scan ("align server failed"); a call then
+    # spends an attempt for nothing. Off by default.
+    require_velocity: false
+    # NDT's input cloud, e.g. /localization/util/downsample/pointcloud. Empty: no check.
+    ready_pointcloud_topic: ""
+    # How recent the last VelocityReport / cloud must be [s].
+    ready_timeout: 1.0
+    # With require_velocity: how long the wheel speed must have reported a stop, unbroken
+    # [s]. Autoware's stop check (stop_check_duration) wants a buffer of twists this long.
+    stopped_for: 3.0

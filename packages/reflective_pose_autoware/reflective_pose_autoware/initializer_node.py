@@ -8,6 +8,8 @@ than about the board:
 
 - is the vehicle stopped enough to trust a cold-start pose
   (``autoware_vehicle_msgs/VelocityReport`` against ``max_speed_for_init``),
+- is the rest of the stack ready to take a pose (``require_velocity``,
+  ``ready_pointcloud_topic``),
 - how many times do we try (``max_attempts``),
 - and what happens when we run out (``fallback_to_user_defined_pose``).
 
@@ -62,6 +64,22 @@ attempt counts only if the matcher had published its loaded map when the call
 went out. The call itself still goes out: cuda_ndt's align is what asks the
 map loader for the tiles around the pose. ``ignore_failures_before_map``
 turns this off.
+
+Readiness
+---------
+The detector finds the board within a second or two of launch, well before the
+rest of a cold-started stack can take a pose: Autoware's pose initializer refuses
+while it has no wheel speed to confirm the vehicle is stopped ("The vehicle is not
+stopped") and while NDT has no scan to align ("align server failed"). Calling
+then spends an attempt on a stack that was never going to accept, and a budget
+of five ran out in seven seconds on a stack that took a minute to come up. So a
+pose is acted on only when the data the call depends on is flowing: with
+``require_velocity``, ``VelocityReport`` s arriving without a gap longer than
+``ready_timeout`` and all stopped for the last ``stopped_for`` seconds (Autoware's stop
+check wants a buffer of twists that long, ``stop_check_duration``, 3 s); with
+``ready_pointcloud_topic`` (NDT's input cloud), a cloud within ``ready_timeout``.
+A pose that arrives before then is ignored, not counted, and the detector's next
+one is tried. Both are off by default, which is the old behaviour.
 """
 
 from dataclasses import dataclass
@@ -118,6 +136,18 @@ class Policy:
     # count against max_attempts: the align could not have succeeded.
     ignore_failures_before_map: bool = True
 
+    # Readiness (see the module docstring). Off by default: the old behaviour,
+    # and a bench with no vehicle interface keeps working.
+    require_velocity: bool = False
+    # A PointCloud2 topic that must be publishing before a pose is sent, e.g.
+    # NDT's input /localization/util/downsample/pointcloud. Empty: no check.
+    ready_pointcloud_topic: str = ""
+    # How recent the last VelocityReport / cloud must be, seconds.
+    ready_timeout: float = 1.0
+    # How long the wheel speed must have reported a stop, unbroken, seconds: Autoware's
+    # pose initializer stop_check_duration, which it checks against a buffer of twists.
+    stopped_for: float = 3.0
+
 
 def declare_policy(node: Node) -> Policy:
     """Declare every ``Policy`` field as a parameter and read it back."""
@@ -165,6 +195,10 @@ class BoardPoseInitializer(Node):
             )
         self._speed = 0.0
         self._last_moving_time: Optional[Time] = None
+        self._last_velocity_time: Optional[Time] = None
+        # since when VelocityReports have arrived without a gap and stopped
+        self._stopped_since: Optional[Time] = None
+        self._last_points_time: Optional[Time] = None
         self._last_reason = ""
 
         # Matches the detector's latched publisher (transient_local, depth 1):
@@ -206,6 +240,14 @@ class BoardPoseInitializer(Node):
                 PointCloud2, MATCHER_MAP_TOPIC, self._on_matcher_map, 1, raw=True
             )
 
+        if self._params.ready_pointcloud_topic:
+            self._points_sub = self.create_subscription(
+                PointCloud2,
+                self._params.ready_pointcloud_topic,
+                self._on_points,
+                sensor_qos,
+            )
+
         self._client = self.create_client(
             InitializeLocalization, self._params.initialize_service
         )
@@ -219,7 +261,15 @@ class BoardPoseInitializer(Node):
     # -- callbacks ----------------------------------------------------------
 
     def _on_velocity(self, msg: VelocityReport):
+        now = self.get_clock().now()
+        gap = (self._last_velocity_time is None or
+               (now - self._last_velocity_time).nanoseconds * 1e-9 > self._params.ready_timeout)
+        self._last_velocity_time = now
         self._speed = abs(float(msg.longitudinal_velocity))
+        if self._speed > self._params.max_speed_for_init or gap:
+            self._stopped_since = None if self._speed > self._params.max_speed_for_init else now
+        elif self._stopped_since is None:
+            self._stopped_since = now
         if self._speed > self._params.max_speed_for_init:
             self._last_moving_time = self.get_clock().now()
 
@@ -232,8 +282,42 @@ class BoardPoseInitializer(Node):
             self.destroy_subscription(self._matcher_map_sub)
             self._matcher_map_sub = None
 
+    def _on_points(self, _msg):
+        self._last_points_time = self.get_clock().now()
+
+    def _not_ready(self) -> str:
+        """Why the stack cannot take a pose yet; '' when it can."""
+        now = self.get_clock().now()
+        timeout = self._params.ready_timeout
+
+        def stale(last: Optional[Time]) -> bool:
+            return last is None or (now - last).nanoseconds * 1e-9 > timeout
+
+        if self._params.require_velocity:
+            if stale(self._last_velocity_time):
+                return f"no wheel speed within {timeout:g} s: not ready to confirm a stop"
+            held = (0.0 if self._stopped_since is None
+                    else (now - self._stopped_since).nanoseconds * 1e-9)
+            if held < self._params.stopped_for:
+                return (f"wheel speed stopped for {held:.1f} s of the "
+                        f"{self._params.stopped_for:g} s the stop check needs")
+        if self._params.ready_pointcloud_topic and stale(self._last_points_time):
+            return (f"no cloud on {self._params.ready_pointcloud_topic} within "
+                    f"{timeout:g} s: NDT has nothing to align")
+        return ""
+
     def _on_board_pose(self, msg: PoseWithCovarianceStamped):
         if self._state in (State.DONE, State.FAILED, State.CALL_SERVICE):
+            return
+
+        why = self._not_ready()
+        if why:
+            # Not an attempt: the call would be refused for a reason the board
+            # pose has nothing to do with. Logged when the reason changes only:
+            # the detector republishes every second or two.
+            reason = f"waiting for the stack: {why}"
+            if reason != self._last_reason:
+                self._note(reason)
             return
 
         # No VelocityReport at all leaves _speed at 0.0 and the gate open, the

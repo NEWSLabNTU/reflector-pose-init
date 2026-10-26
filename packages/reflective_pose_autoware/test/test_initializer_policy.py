@@ -193,3 +193,61 @@ def test_counting_from_the_first_failure_is_still_available(node):
     fail_attempts(node, 2)
     assert node._attempts == 2
     assert node._state is State.FAILED
+
+def test_not_ready_stack_spends_no_attempt(node):
+    """A pose before the wheel speed and NDT's cloud flow is not an attempt."""
+    node._on_matcher_map(b"")
+    node._params.require_velocity = True
+    node._params.ready_pointcloud_topic = "/localization/util/downsample/pointcloud"
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 0 and node._client.requests == []
+    assert "wheel speed" in node._last_reason
+
+    node._params.stopped_for = 0.0      # the stop's duration has its own test
+    node._on_velocity(velocity(0.0))
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 0 and node._client.requests == []
+    assert "NDT" in node._last_reason
+
+    node._on_points(None)
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 1 and len(node._client.requests) == 1
+
+
+def test_stale_data_is_not_ready(node):
+    node._params.require_velocity = True
+    node._params.ready_timeout = 1.0
+    node._last_velocity_time = node.get_clock().now() - rclpy.duration.Duration(seconds=5)
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 0
+
+
+def test_readiness_is_off_by_default(node):
+    """No vehicle interface, no cloud: the old behaviour, the gate open."""
+    node._on_matcher_map(b"")
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 1
+
+
+def test_stop_must_be_held_as_long_as_autoware_checks(node):
+    """Autoware's stop check wants stop_check_duration (3 s) of stopped twists."""
+    node._on_matcher_map(b"")
+    node._params.require_velocity = True
+    node._params.stopped_for = 3.0
+    node._on_velocity(velocity(0.0))
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 0 and "stopped for" in node._last_reason
+    node._stopped_since = node.get_clock().now() - rclpy.duration.Duration(seconds=3.5)
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 1
+
+
+def test_motion_restarts_the_stop(node):
+    node._params.require_velocity = True
+    node._params.stopped_for = 3.0
+    node._stopped_since = node.get_clock().now() - rclpy.duration.Duration(seconds=10)
+    node._on_velocity(velocity(0.5))
+    assert node._stopped_since is None
+    node._on_velocity(velocity(0.0))
+    node._on_board_pose(board_pose(node))
+    assert node._attempts == 0

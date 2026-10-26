@@ -368,6 +368,10 @@ Same shape, same test.
 | `fallback_to_user_defined_pose` | `false` | send an empty request when attempts run out, so Autoware uses its own user-defined pose |
 | `pose_wait_timeout` | `0.0` | seconds to wait for a pose before spending an attempt; `0` disables |
 | `ignore_failures_before_map` | `true` | a failed attempt made before the scan matcher published its loaded map does not count against `max_attempts` |
+| `require_velocity` | `false` | act on a board pose only once `VelocityReport` is recent and has reported a stop for `stopped_for` seconds |
+| `ready_pointcloud_topic` | `""` | act on a board pose only once this cloud (NDT's input) is recent; empty disables the check |
+| `ready_timeout` | `1.0` | how recent the last velocity report or cloud must be [s] |
+| `stopped_for` | `3.0` | with `require_velocity`: how long the stop must have been held, unbroken [s] |
 
 Keep `fallback_to_user_defined_pose` false unless there is an explicit, reviewed
 fallback policy. A silent fallback to a fixed pose turns a detector failure into
@@ -387,6 +391,14 @@ map) and counts an attempt only if the map had been seen when the call went
 out. The calls still go out: cuda_ndt's align is what requests the tiles. A
 stack whose matcher does not publish that topic never counts a failure, so turn
 this off there.
+
+The readiness keys cover the refusals that come before the map. Autoware's pose
+initializer rejects a call while it has no wheel speed, or less than
+`stop_check_duration` (3 s) of it ("The vehicle is not stopped"), and the align
+fails while NDT has no input scan. A board pose that arrives then is not acted
+on and is not an attempt; the node logs what it is waiting for, once per
+change of reason. All off by default, so a bench with no vehicle interface
+behaves as before.
 
 ## anchor-map-to-board flags
 
