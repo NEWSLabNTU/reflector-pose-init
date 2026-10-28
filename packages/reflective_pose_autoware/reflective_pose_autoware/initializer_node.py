@@ -96,6 +96,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
+from std_srvs.srv import Trigger
 from autoware_localization_msgs.srv import InitializeLocalization
 
 #: Where ``reflective_pose_ros``'s ``~/board_pose`` lands when its node is named
@@ -259,6 +260,12 @@ class BoardPoseInitializer(Node):
             InitializeLocalization, self._params.initialize_service
         )
 
+        # The latest pose the detector published and when it arrived, kept so
+        # the trigger below can act on it without waiting for the next one.
+        self._latest_pose: Optional[PoseWithCovarianceStamped] = None
+        self._latest_pose_time: Optional[Time] = None
+        self.create_service(Trigger, "~/reinitialize", self._on_reinitialize)
+
         self._diagnostics_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self.create_timer(1.0, self._publish_diagnostics)
         self.get_logger().info(
@@ -313,7 +320,51 @@ class BoardPoseInitializer(Node):
                     f"{timeout:g} s: NDT has nothing to align")
         return ""
 
+    def _on_reinitialize(self, _request, response):
+        """Operator trigger: forget the last result and initialize again.
+
+        One initialization per launch was the old rule, which left a bad seed
+        or a cart moved back to the board with only a relaunch to fix it. This
+        re-arms the node (attempt budget, spacing and wait clock reset) and acts
+        on the detector's latest pose if it is fresh. The same gates apply as
+        for the first one: the vehicle must have reported a stop and NDT must
+        have a cloud, so a trigger while the cart moves arms the node and waits.
+        Refused only while a call is in flight, which a second one would race.
+        """
+        if self._state is State.CALL_SERVICE:
+            response.success = False
+            response.message = "an initialize call is already in flight"
+            return response
+        self._attempts = 0
+        self._last_attempt_end = None
+        self._last_pose_rx = self.get_clock().now()
+        self._state = State.WAIT_POSE
+        self._last_reason = "re-armed by the reinitialize trigger"
+        self.get_logger().info("re-armed by the reinitialize trigger")
+
+        fresh = (
+            self._latest_pose is not None
+            and (self.get_clock().now() - self._latest_pose_time).nanoseconds * 1e-9
+            <= max(self._params.ready_timeout, 3.0)
+        )
+        if not fresh:
+            response.success = True
+            response.message = (
+                "armed; no board pose in the last few seconds, will act on the "
+                "next one (is the board in view?)"
+            )
+            return response
+        self._on_board_pose(self._latest_pose)
+        response.success = True
+        response.message = (
+            "initializing from the board pose" if self._state is State.CALL_SERVICE
+            else f"armed; {self._last_reason}"
+        )
+        return response
+
     def _on_board_pose(self, msg: PoseWithCovarianceStamped):
+        self._latest_pose = msg
+        self._latest_pose_time = self.get_clock().now()
         if self._state in (State.DONE, State.FAILED, State.CALL_SERVICE):
             return
 

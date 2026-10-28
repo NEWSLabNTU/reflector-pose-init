@@ -279,3 +279,48 @@ def test_pose_wait_counts_from_the_last_pose_seen(node):
     node._last_pose_rx = node.get_clock().now() - rclpy.duration.Duration(seconds=61)
     node._check_pose_wait()
     assert node._state is State.FAILED
+
+
+def _ready(node):
+    node._params.require_velocity = False
+    node._params.ready_pointcloud_topic = ""
+    node._matcher_has_map = True
+
+
+def test_reinitialize_rearms_after_success_and_acts_on_the_latest_pose(node):
+    from std_srvs.srv import Trigger
+
+    _ready(node)
+    msg = PoseWithCovarianceStamped()
+    node._on_board_pose(msg)
+    node._state = State.DONE  # the first initialization succeeded
+    assert len(node._client.requests) == 1
+
+    response = node._on_reinitialize(Trigger.Request(), Trigger.Response())
+    assert response.success
+    assert len(node._client.requests) == 2
+    assert node._attempts == 1  # the budget restarted
+
+
+def test_reinitialize_without_a_fresh_pose_arms_and_waits(node):
+    from std_srvs.srv import Trigger
+
+    _ready(node)
+    node._state = State.FAILED
+    response = node._on_reinitialize(Trigger.Request(), Trigger.Response())
+    assert response.success and "armed" in response.message
+    assert node._state is State.WAIT_POSE
+    assert node._client.requests == []
+    node._on_board_pose(PoseWithCovarianceStamped())  # the next pose is acted on
+    assert len(node._client.requests) == 1
+
+
+def test_reinitialize_refused_while_a_call_is_in_flight(node):
+    from std_srvs.srv import Trigger
+
+    _ready(node)
+    node._on_board_pose(PoseWithCovarianceStamped())
+    assert node._state is State.CALL_SERVICE
+    response = node._on_reinitialize(Trigger.Request(), Trigger.Response())
+    assert not response.success
+    assert len(node._client.requests) == 1
