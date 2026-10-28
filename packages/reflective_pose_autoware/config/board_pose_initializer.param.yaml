@@ -14,12 +14,17 @@
     fallback_to_user_defined_pose: false
 
     # How long to wait for a board pose before the attempt budget counts one
-    # as spent. Zero disables it.
+    # as spent, counted from the last pose seen, acted on or not. Zero disables
+    # it.
     #
     # Detection and the service call are two processes, so an attempt is one
     # pose acted on: a detector that never detects spends no attempts and the
     # fallback never runs. This bounds that case.
-    pose_wait_timeout: 0.0
+    pose_wait_timeout: 60.0
+
+    # Least time between two service calls, so a refused call retried on the
+    # detector's next pose (100 ms away) cannot spend the budget in a second.
+    min_attempt_spacing: 1.0
 
     # Failed attempts made before the scan matcher has published its loaded
     # map (/localization/pose_estimator/debug/loaded_pointcloud_map) do not

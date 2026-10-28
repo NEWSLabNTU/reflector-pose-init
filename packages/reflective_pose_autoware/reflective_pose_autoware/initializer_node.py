@@ -131,7 +131,11 @@ class Policy:
     # as spent. Zero disables it. Detection and the service call are two
     # processes, so an attempt is one pose acted on: a detector that never
     # detects spends no attempts and the fallback never runs. This bounds it.
-    pose_wait_timeout: float = 0.0
+    pose_wait_timeout: float = 60.0
+    # Least time between two service calls, from the end of one to the start of
+    # the next. A refused or failed call is retried on the detector's next pose,
+    # which can be 100 ms away; without this the budget goes in a second.
+    min_attempt_spacing: float = 1.0
     # Failed attempts made before the scan matcher has published a map do not
     # count against max_attempts: the align could not have succeeded.
     ignore_failures_before_map: bool = True
@@ -187,12 +191,15 @@ class BoardPoseInitializer(Node):
         # failures because it owned the detector loop. This restores the bound.
         # Zero disables it, which is the safe default only because the detector
         # reports its own silence on /diagnostics.
+        # Counted from the last board pose seen, acted on or not, or from start:
+        # a stack slow to become ready while the board is in view is waiting for
+        # itself, not for the detector.
         self._pose_wait_timeout = float(self._params.pose_wait_timeout)
+        self._last_pose_rx = self.get_clock().now()
+        self._last_attempt_end: Optional[Time] = None
         self._wait_timer = None
         if self._pose_wait_timeout > 0.0:
-            self._wait_timer = self.create_timer(
-                self._pose_wait_timeout, self._on_pose_wait_timeout
-            )
+            self._wait_timer = self.create_timer(1.0, self._check_pose_wait)
         self._speed = 0.0
         self._last_moving_time: Optional[Time] = None
         self._last_velocity_time: Optional[Time] = None
@@ -309,6 +316,13 @@ class BoardPoseInitializer(Node):
     def _on_board_pose(self, msg: PoseWithCovarianceStamped):
         if self._state in (State.DONE, State.FAILED, State.CALL_SERVICE):
             return
+
+        self._last_pose_rx = self.get_clock().now()
+
+        if self._last_attempt_end is not None:
+            since = (self._last_pose_rx - self._last_attempt_end).nanoseconds * 1e-9
+            if since < self._params.min_attempt_spacing:
+                return
 
         why = self._not_ready()
         if why:
@@ -428,6 +442,8 @@ class BoardPoseInitializer(Node):
     def _attempt_failed(self, reason: str):
         """One initialization attempt failed. Retry, or spend the budget.
 
+        Either way the next call waits ``min_attempt_spacing``.
+
         The old node treated a service error as terminal because its budget was
         spent on failed *detections*, which it could see. Here the only failure
         that reaches this node is a service failure, so making the first one
@@ -436,6 +452,7 @@ class BoardPoseInitializer(Node):
         A failed attempt therefore returns to waiting for the detector's next
         publication until the budget is gone.
         """
+        self._last_attempt_end = self.get_clock().now()
         if not self._attempt_counts:
             reason = f"{reason} (the scan matcher has no map yet; not counted)"
             self.get_logger().warn(reason)
@@ -473,6 +490,11 @@ class BoardPoseInitializer(Node):
         self.get_logger().info(reason)
 
     # -- diagnostics --------------------------------------------------------
+
+    def _check_pose_wait(self):
+        waited = (self.get_clock().now() - self._last_pose_rx).nanoseconds * 1e-9
+        if waited >= self._pose_wait_timeout:
+            self._on_pose_wait_timeout()
 
     def _on_pose_wait_timeout(self):
         """No board pose arrived within the timeout: spend an attempt.

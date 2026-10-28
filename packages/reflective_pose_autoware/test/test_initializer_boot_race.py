@@ -83,6 +83,7 @@ def run_boot(context, ignore_failures_before_map):
         context=context,
         parameter_overrides=[
             Parameter("max_attempts", value=MAX_ATTEMPTS),
+            Parameter("min_attempt_spacing", value=0.0),
             Parameter("ignore_failures_before_map", value=ignore_failures_before_map),
         ],
     )

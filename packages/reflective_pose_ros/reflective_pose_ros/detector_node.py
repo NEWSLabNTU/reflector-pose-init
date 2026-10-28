@@ -77,6 +77,7 @@ from .debug_viz import (
     rejection_marker_array,
 )
 from .decision import Verdict, gate_seed_zone, judge
+from .search_schedule import SearchSchedule
 
 
 @dataclass
@@ -105,6 +106,13 @@ class NodeParams:
     # on a vehicle.
     twist_type: str = ""
     max_speed_for_accumulation: float = 0.05
+    # While no board is in view the search backs off from every cloud to one
+    # attempt per this many seconds, in steps (search_schedule.STEPS). Any
+    # detection returns it to every cloud, and so does a miss within
+    # search_lost_grace seconds of one: a board in view is tracked at the cloud
+    # rate.
+    search_interval_max: float = 2.0
+    search_lost_grace: float = 1.0
 
 
 def declare_node_params(node: Node) -> NodeParams:
@@ -182,6 +190,14 @@ class BoardDetectorNode(Node):
         self._attempts = 0
         self._detections = 0
         self._scans = []
+        self._schedule = SearchSchedule(
+            interval_max=float(self._params.search_interval_max),
+            lost_grace=float(self._params.search_lost_grace),
+        )
+        self._misses = 0
+        self._last_detection_ns: Optional[int] = None
+        self._next_search_ns = 0
+        self._search_interval = 0.0
         self._transform_base_sensor: Optional[np.ndarray] = None
         self._last_verdict: Optional[Verdict] = None
 
@@ -323,6 +339,11 @@ class BoardDetectorNode(Node):
             self._scans = []
             return
 
+        # Backing off: leave this cloud alone. Never mid-batch, so a batch that
+        # has started is finished; dropped clouds are not accumulated.
+        if not self._scans and self.get_clock().now().nanoseconds < self._next_search_ns:
+            return
+
         self._scans.append(self._read_cloud(msg))
         if len(self._scans) < self._accumulate_scans:
             return
@@ -366,6 +387,14 @@ class BoardDetectorNode(Node):
 
     # -- detection ----------------------------------------------------------
 
+    def _schedule_next_search(self):
+        now = self.get_clock().now().nanoseconds
+        self._misses += 1
+        since = (float("inf") if self._last_detection_ns is None
+                 else (now - self._last_detection_ns) * 1e-9)
+        self._search_interval = self._schedule.interval(self._misses, since)
+        self._next_search_ns = now + int(self._search_interval * 1e9)
+
     def _attempt_detection(self, points, intensity, frame_id: str):
         self._attempts += 1
         result = detect_board(
@@ -390,8 +419,22 @@ class BoardDetectorNode(Node):
             # No attempt budget here: the node keeps looking, and a consumer
             # that wants to give up after N tries counts the poses it did not
             # receive. Giving up is policy.
-            self.get_logger().warn(f"attempt {self._attempts}: {verdict.message}")
+            self._schedule_next_search()
+            if self._misses == 1:
+                # Said once per streak: a search backing off for minutes must
+                # not write a line per attempt. The interval is on /diagnostics.
+                self.get_logger().warn(
+                    f"attempt {self._attempts}: {verdict.message} "
+                    "(searching; further misses are not logged)"
+                )
+            else:
+                self.get_logger().debug(f"attempt {self._attempts}: {verdict.message}")
             return
+
+        self._misses = 0
+        self._last_detection_ns = self.get_clock().now().nanoseconds
+        self._search_interval = 0.0
+        self._next_search_ns = 0
 
         detection = result.detection
         self._publish_detection(detection, frame_id)
@@ -509,6 +552,8 @@ class BoardDetectorNode(Node):
             KeyValue(key="state", value=self._state.value),
             KeyValue(key="attempts", value=str(self._attempts)),
             KeyValue(key="detections", value=str(self._detections)),
+            KeyValue(key="consecutive_misses", value=str(self._misses)),
+            KeyValue(key="search_interval_s", value=f"{self._search_interval:g}"),
         ]
         if verdict is not None:
             status.values += [KeyValue(key=key, value=value) for key, value in verdict.values]

@@ -26,3 +26,9 @@
     # with the publisher on a vehicle; name it there.
     twist_type: ""
     max_speed_for_accumulation: 0.05
+
+    # Search cadence while no board is in view: every cloud at first, backing off
+    # in steps to one attempt per search_interval_max seconds. A detection resets
+    # it; a miss within search_lost_grace seconds of one does not back off.
+    search_interval_max: 2.0
+    search_lost_grace: 1.0

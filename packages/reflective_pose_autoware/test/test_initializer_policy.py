@@ -53,6 +53,7 @@ def ros_context():
 @pytest.fixture
 def node():
     instance = BoardPoseInitializer()
+    instance._params.min_attempt_spacing = 0.0
     instance._client = StubClient()
     yield instance
     instance.destroy_node()
@@ -251,3 +252,30 @@ def test_motion_restarts_the_stop(node):
     node._on_velocity(velocity(0.0))
     node._on_board_pose(board_pose(node))
     assert node._attempts == 0
+
+
+def test_attempts_are_spaced(node):
+    node._params.min_attempt_spacing = 1.0
+    node._params.require_velocity = False
+    node._params.ready_pointcloud_topic = ""
+    node._matcher_has_map = True
+    msg = PoseWithCovarianceStamped()
+    node._on_board_pose(msg)
+    assert len(node._client.requests) == 1
+    node._attempt_failed("rejected")
+    assert node._state is State.WAIT_POSE
+    node._on_board_pose(msg)
+    assert len(node._client.requests) == 1  # inside min_attempt_spacing
+    node._last_attempt_end = node.get_clock().now() - rclpy.duration.Duration(seconds=2)
+    node._on_board_pose(msg)
+    assert len(node._client.requests) == 2
+
+
+def test_pose_wait_counts_from_the_last_pose_seen(node):
+    node._pose_wait_timeout = 60.0
+    node._last_pose_rx = node.get_clock().now()
+    node._check_pose_wait()
+    assert node._state is State.WAIT_POSE
+    node._last_pose_rx = node.get_clock().now() - rclpy.duration.Duration(seconds=61)
+    node._check_pose_wait()
+    assert node._state is State.FAILED

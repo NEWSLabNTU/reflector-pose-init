@@ -320,6 +320,8 @@ exactly the parameters the node declares, with the node's own defaults.
 | `sensor_frame` | `velodyne` | must match the cloud's `header.frame_id` |
 | `base_frame` | `base_link` | static TF to `sensor_frame` must exist |
 | `accumulate_scans` | `1` | scans stacked per detection attempt |
+| `search_interval_max` | `2.0` | while no board is in view the search backs off from every cloud to one attempt per this many seconds (steps at 5, 8, 11, 14 misses: 0.25, 0.5, 1, 2 s) |
+| `search_lost_grace` | `1.0` | a miss this soon after a detection does not back off; a board in view is tracked at the cloud rate |
 | `twist_topic` | `""` | motion guard source; empty disables it |
 | `twist_type` | `""` | the motion source's message type; empty detects it at startup |
 | `max_speed_for_accumulation` | `0.05` | m/s above which scans are discarded |
@@ -366,7 +368,8 @@ Same shape, same test.
 | `max_speed_for_init` | `0.05` | m/s above which no pose is acted on |
 | `max_attempts` | `5` | failed attempts before the fallback policy runs |
 | `fallback_to_user_defined_pose` | `false` | send an empty request when attempts run out, so Autoware uses its own user-defined pose |
-| `pose_wait_timeout` | `0.0` | seconds to wait for a pose before spending an attempt; `0` disables |
+| `pose_wait_timeout` | `60.0` | seconds without any board pose (acted on or not) before the node fails visibly; `0` disables |
+| `min_attempt_spacing` | `1.0` | least seconds between two initialize calls |
 | `ignore_failures_before_map` | `true` | a failed attempt made before the scan matcher published its loaded map does not count against `max_attempts` |
 | `require_velocity` | `false` | act on a board pose only once `VelocityReport` is recent and has reported a stop for `stopped_for` seconds |
 | `ready_pointcloud_topic` | `""` | act on a board pose only once this cloud (NDT's input) is recent; empty disables the check |
