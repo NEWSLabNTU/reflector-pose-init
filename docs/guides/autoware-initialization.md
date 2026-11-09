@@ -103,6 +103,37 @@ initializer attempts because the initializer never sees a pose. If the board
 is never detected, use the detector's diagnostics and RViz rejection markers;
 do not expect `max_attempts` or the fallback policy to resolve it.
 
+## Re-run from the RViz button
+
+One initialization per launch is the default. Two ways to ask for another, both
+with the vehicle stopped and the board in view:
+
+- `ros2 service call /localization/board_pose_initializer/reinitialize std_srvs/srv/Trigger`
+  re-arms the node and returns at once ("armed" or "initializing").
+- With `adapi_initialize_service: /api/localization/initialize`, the node also
+  serves the AD API service that Autoware's RViz panel button ("Initialize with
+  GNSS") calls with an empty pose. An empty request re-arms the node the same
+  way and answers when the outcome is known: success once the pose initializer
+  accepted a board pose, `ERROR_ESTIMATION` when the attempt budget ran out or
+  no board pose arrived within `adapi_board_timeout`, `ERROR_UNSAFE` when the
+  vehicle was moving at the timeout. The node stays armed after a timeout.
+  A request that carries a pose (RViz *2D Pose Estimate* through
+  `initial_pose_adaptor`, scripts) is forwarded unchanged to
+  `adapi_forward_service` and its response returned.
+
+The second needs the launch to move `default_adapi`'s own server out of the way,
+because two servers on one name race. In the deployment's launch, around the
+include that starts `default_adapi`:
+
+```xml
+<set_remap from="/api/localization/initialize" to="/api/localization/initialize_default"/>
+```
+
+Scope it to the API group and to board mode. `initial_pose_adaptor` sits in the
+same group, so 2D Pose Estimate then reaches `default_adapi` directly. The node
+spins a multi-threaded executor for this; the AD API service runs in its own
+reentrant callback group and every other callback stays serialized.
+
 ## If initialization fails
 
 - **No board pose:** follow [live detection](live-detection.md) and

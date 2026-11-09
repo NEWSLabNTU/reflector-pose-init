@@ -375,6 +375,9 @@ Same shape, same test.
 | `ready_pointcloud_topic` | `""` | act on a board pose only once this cloud (NDT's input) is recent; empty disables the check |
 | `ready_timeout` | `1.0` | how recent the last velocity report or cloud must be [s] |
 | `stopped_for` | `3.0` | with `require_velocity`: how long the stop must have been held, unbroken [s] |
+| `adapi_initialize_service` | `""` | serve the AD API `InitializeLocalization` here, normally `/api/localization/initialize`; empty serves nothing. See [Autoware initialization](guides/autoware-initialization.md#re-run-from-the-rviz-button) |
+| `adapi_forward_service` | `/api/localization/initialize_default` | where a request that carries a pose is forwarded unchanged: `default_adapi`'s server, remapped there by the deployment's launch |
+| `adapi_board_timeout` | `30.0` | how long an empty AD API request waits for the board initialization before it answers with an error [s] |
 
 Keep `fallback_to_user_defined_pose` false unless there is an explicit, reviewed
 fallback policy. A silent fallback to a fixed pose turns a detector failure into

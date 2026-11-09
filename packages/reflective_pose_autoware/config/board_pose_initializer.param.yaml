@@ -45,3 +45,14 @@
     # With require_velocity: how long the wheel speed must have reported a stop, unbroken
     # [s]. Autoware's stop check (stop_check_duration) wants a buffer of twists this long.
     stopped_for: 3.0
+
+    # The AD API entry point the RViz "Initialize with GNSS" button calls. Empty:
+    # not served. Set to /api/localization/initialize only where the launch also
+    # moves default_adapi's server to adapi_forward_service: two servers on one
+    # name is a race. An empty request then re-runs the board initialization and
+    # answers with its outcome; a request with a pose goes to the forward service
+    # unchanged.
+    adapi_initialize_service: ""
+    adapi_forward_service: /api/localization/initialize_default
+    # How long an empty request waits for the board initialization [s].
+    adapi_board_timeout: 30.0

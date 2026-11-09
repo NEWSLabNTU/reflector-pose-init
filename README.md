@@ -207,7 +207,9 @@ The three ROS-free packages need only `PYTHONPATH`; the two ROS ones need
 - [Tracking a moving board](docs/guides/tracking-mode.md) — the board in
   `base_link` every scan, the AutoSDV profiles, latency
 - [Autoware initialization](docs/guides/autoware-initialization.md) — hand the
-  pose to `/localization/initialize`
+  pose to `/localization/initialize`; re-run it with the
+  `~/reinitialize` trigger or, when `adapi_initialize_service` is set, the RViz
+  panel's initialize button (`/api/localization/initialize`, empty pose)
 - [Debugging](docs/guides/debugging.md) — inspect live and offline failures
 - [Map anchoring](docs/guides/map-anchoring.md) — produce an anchored map
 - [Rosbag validation](docs/guides/rosbag-validation.md) — validate a real scan

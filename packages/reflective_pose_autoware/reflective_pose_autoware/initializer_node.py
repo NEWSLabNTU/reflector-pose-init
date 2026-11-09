@@ -80,7 +80,37 @@ check wants a buffer of twists that long, ``stop_check_duration``, 3 s); with
 ``ready_pointcloud_topic`` (NDT's input cloud), a cloud within ``ready_timeout``.
 A pose that arrives before then is ignored, not counted, and the detector's next
 one is tried. Both are off by default, which is the old behaviour.
+
+The AD API entry point (the RViz "Initialize with GNSS" button)
+---------------------------------------------------------------
+Autoware's RViz panel has one button for "initialize localization without a
+pose": it calls the AD API service ``/api/localization/initialize``
+(``autoware_adapi_v1_msgs/InitializeLocalization``) with an empty pose list,
+which ``default_adapi`` forwards to ``/localization/initialize``. On a board
+map there is no GNSS to initialize from, so with ``adapi_initialize_service``
+set this node serves that name itself, and the deployment's launch moves
+``default_adapi``'s server to ``adapi_forward_service`` (golf cart:
+``/api/localization/initialize_default``). Then:
+
+- an empty request re-arms this node, exactly as the ``~/reinitialize``
+  trigger does, and the response waits for the outcome: success once the
+  pose initializer accepted a board pose, an error when the budget ran out,
+  or when ``adapi_board_timeout`` passed without one (no board in view, the
+  cart moving, the stack not ready); the node stays armed after a timeout;
+- a request that carries a pose (RViz 2D Pose Estimate through
+  ``initial_pose_adaptor``, scripts) is not ours: it goes to
+  ``adapi_forward_service`` unchanged and its response comes back unchanged.
+
+Empty ``adapi_initialize_service`` (the default) serves nothing, and the node
+behaves as before. The waiting response needs a second thread: ``main`` spins
+a multi-threaded executor, the AD API service and its forwarding client run in
+a reentrant group of their own, and every other callback stays in the node's
+default mutually exclusive group, so the state machine is still single-threaded.
+The service thread never touches it: it queues a request and wakes the state
+machine through a guard condition.
 """
+
+import threading
 
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
@@ -91,13 +121,15 @@ import rclpy
 from autoware_vehicle_msgs.msg import VelocityReport
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from rclpy.executors import ExternalShutdownException
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import Trigger
 from autoware_localization_msgs.srv import InitializeLocalization
+from autoware_adapi_v1_msgs.srv import InitializeLocalization as AdapiInitializeLocalization
 
 #: Where ``reflective_pose_ros``'s ``~/board_pose`` lands when its node is named
 #: ``board_detector`` in the ``/localization`` namespace, which is what this
@@ -111,6 +143,10 @@ VELOCITY_TOPIC = "/vehicle/status/velocity_status"
 #: The scan matcher publishes the map it holds here, once it holds one: both
 #: Autoware's ndt_scan_matcher and cuda_ndt. Remap it for another namespace.
 MATCHER_MAP_TOPIC = "/localization/pose_estimator/debug/loaded_pointcloud_map"
+
+#: How long a forwarded AD API request (one with a pose) may take, seconds.
+#: The pose initializer's align is behind it and has taken over 20 s.
+ADAPI_FORWARD_TIMEOUT = 120.0
 
 
 @dataclass
@@ -152,6 +188,31 @@ class Policy:
     # How long the wheel speed must have reported a stop, unbroken, seconds: Autoware's
     # pose initializer stop_check_duration, which it checks against a buffer of twists.
     stopped_for: float = 3.0
+
+    # The AD API entry point (see the module docstring). Empty: not served.
+    # The golf cart sets /api/localization/initialize under pose_initializer:=board.
+    adapi_initialize_service: str = ""
+    # Where requests that carry a pose go: default_adapi's server, moved here
+    # by the deployment's launch so this node can take the public name.
+    adapi_forward_service: str = "/api/localization/initialize_default"
+    # How long an empty request waits for the board initialization, seconds.
+    adapi_board_timeout: float = 30.0
+
+
+class _AdapiWaiter:
+    """One empty AD API request waiting for the board initialization to end."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.success = False
+        self.code = 0
+        self.message = ""
+
+    def finish(self, success: bool, message: str, code: int = 0):
+        if self.event.is_set():
+            return
+        self.success, self.message, self.code = success, message, code
+        self.event.set()
 
 
 def declare_policy(node: Node) -> Policy:
@@ -266,6 +327,34 @@ class BoardPoseInitializer(Node):
         self._latest_pose_time: Optional[Time] = None
         self.create_service(Trigger, "~/reinitialize", self._on_reinitialize)
 
+        # The AD API entry point. Its own reentrant group: an empty request
+        # blocks its thread until the board initialization ends, and the
+        # forwarding client's response must be able to arrive meanwhile.
+        self._adapi_lock = threading.Lock()
+        self._adapi_queued = []   # waiters the state machine has not seen yet
+        self._adapi_active = []   # waiters armed, resolved by the outcome
+        self._adapi_group = ReentrantCallbackGroup()
+        self._adapi_wake = None
+        self._adapi_forward = None
+        if self._params.adapi_initialize_service:
+            self._adapi_wake = self.create_guard_condition(self._on_adapi_wake)
+            self._adapi_forward = self.create_client(
+                AdapiInitializeLocalization,
+                self._params.adapi_forward_service,
+                callback_group=self._adapi_group,
+            )
+            self.create_service(
+                AdapiInitializeLocalization,
+                self._params.adapi_initialize_service,
+                self._on_adapi_initialize,
+                callback_group=self._adapi_group,
+            )
+            self.get_logger().info(
+                f"serving {self._params.adapi_initialize_service}: an empty request "
+                f"re-runs the board initialization, one with a pose goes to "
+                f"{self._params.adapi_forward_service}"
+            )
+
         self._diagnostics_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self.create_timer(1.0, self._publish_diagnostics)
         self.get_logger().info(
@@ -335,12 +424,18 @@ class BoardPoseInitializer(Node):
             response.success = False
             response.message = "an initialize call is already in flight"
             return response
+        response.success = True
+        response.message = self._rearm("the reinitialize trigger")
+        return response
+
+    def _rearm(self, by: str) -> str:
+        """Re-arm and act on the latest pose if fresh; what happened, in words."""
         self._attempts = 0
         self._last_attempt_end = None
         self._last_pose_rx = self.get_clock().now()
         self._state = State.WAIT_POSE
-        self._last_reason = "re-armed by the reinitialize trigger"
-        self.get_logger().info("re-armed by the reinitialize trigger")
+        self._last_reason = f"re-armed by {by}"
+        self.get_logger().info(self._last_reason)
 
         fresh = (
             self._latest_pose is not None
@@ -348,19 +443,97 @@ class BoardPoseInitializer(Node):
             <= max(self._params.ready_timeout, 3.0)
         )
         if not fresh:
-            response.success = True
-            response.message = (
+            return (
                 "armed; no board pose in the last few seconds, will act on the "
                 "next one (is the board in view?)"
             )
-            return response
         self._on_board_pose(self._latest_pose)
-        response.success = True
-        response.message = (
+        if self._state is State.DONE:
+            # The call can complete inside _on_board_pose when its response is
+            # immediate (a stub); report what happened, not what was planned.
+            return "initialized from the board"
+        return (
             "initializing from the board pose" if self._state is State.CALL_SERVICE
             else f"armed; {self._last_reason}"
         )
+
+    # -- the AD API entry point -----------------------------------------------
+
+    def _on_adapi_initialize(self, request, response):
+        """/api/localization/initialize, served in board mode. Runs in its own thread."""
+        if len(request.pose) > 0:
+            return self._forward_adapi(request, response)
+
+        waiter = _AdapiWaiter()
+        asked = self.get_clock().now()
+        with self._adapi_lock:
+            self._adapi_queued.append(waiter)
+        self._adapi_wake.trigger()
+        timeout = float(self._params.adapi_board_timeout)
+        if not waiter.event.wait(timeout if timeout > 0.0 else None):
+            with self._adapi_lock:
+                for pending in (self._adapi_queued, self._adapi_active):
+                    if waiter in pending:
+                        pending.remove(waiter)
+            moving = self._speed > self._params.max_speed_for_init
+            seen = self._latest_pose_time
+            if moving:
+                why = f"the cart is moving ({self._speed:.2f} m/s)"
+            elif seen is None or seen < asked:
+                why = "no board pose from the detector (is the board in view?)"
+            else:
+                why = self._last_reason or self._state.value
+            waiter.finish(
+                False,
+                f"board initialization did not finish within {timeout:g} s: {why}. "
+                "Still armed: it will initialize when the board is seen with the "
+                "cart stopped",
+                AdapiInitializeLocalization.Response.ERROR_UNSAFE if moving
+                else AdapiInitializeLocalization.Response.ERROR_ESTIMATION,
+            )
+        response.status.success = waiter.success
+        response.status.code = waiter.code
+        response.status.message = waiter.message
         return response
+
+    def _forward_adapi(self, request, response):
+        """A request with a pose is the default handler's: pass it through unchanged."""
+        name = self._params.adapi_forward_service
+        if not self._adapi_forward.wait_for_service(timeout_sec=2.0):
+            response.status.success = False
+            response.status.code = AdapiInitializeLocalization.Response.ERROR_ESTIMATION
+            response.status.message = f"{name} is not available (is default_adapi running?)"
+            return response
+        done = threading.Event()
+        future = self._adapi_forward.call_async(request)
+        future.add_done_callback(lambda _future: done.set())
+        if not done.wait(ADAPI_FORWARD_TIMEOUT) or future.result() is None:
+            future.cancel()
+            response.status.success = False
+            response.status.code = AdapiInitializeLocalization.Response.ERROR_ESTIMATION
+            response.status.message = f"no response from {name} within {ADAPI_FORWARD_TIMEOUT:g} s"
+            return response
+        return future.result()
+
+    def _on_adapi_wake(self):
+        """State-machine side of an empty AD API request: arm, or join the call in flight."""
+        with self._adapi_lock:
+            queued, self._adapi_queued = self._adapi_queued, []
+            if not queued:
+                return
+            self._adapi_active.extend(queued)
+        if self._state is State.CALL_SERVICE:
+            # Its outcome answers this request too; a second call would race it.
+            self.get_logger().info("AD API initialize: joining the call in flight")
+            return
+        self.get_logger().info("AD API initialize with no pose: re-running the board initialization")
+        self._rearm("an AD API initialize request")
+
+    def _resolve_adapi(self, success: bool, message: str, code: int = 0):
+        with self._adapi_lock:
+            waiters, self._adapi_active = self._adapi_active, []
+        for waiter in waiters:
+            waiter.finish(success, message, code)
 
     def _on_board_pose(self, msg: PoseWithCovarianceStamped):
         self._latest_pose = msg
@@ -483,6 +656,7 @@ class BoardPoseInitializer(Node):
             self._state = State.DONE
             self._last_reason = "initialized from board"
             self.get_logger().info("localization initialized from the board")
+            self._resolve_adapi(True, "initialized from the board")
         else:
             self._attempt_failed(
                 f"initialize service rejected: {response.status.message}"
@@ -530,11 +704,20 @@ class BoardPoseInitializer(Node):
         self._client.call_async(request)
         self._state = State.DONE
         self._last_reason = "fell back to the user-defined initial pose"
+        self._resolve_adapi(
+            False,
+            f"board initialization failed ({reason}); fell back to the user-defined initial pose",
+            AdapiInitializeLocalization.Response.ERROR_ESTIMATION,
+        )
 
     def _fail(self, reason: str):
         self._state = State.FAILED
         self._last_reason = reason
         self.get_logger().error(reason)
+        self._resolve_adapi(
+            False, f"board initialization failed: {reason}",
+            AdapiInitializeLocalization.Response.ERROR_ESTIMATION,
+        )
 
     def _note(self, reason: str):
         self._last_reason = reason
@@ -587,8 +770,13 @@ class BoardPoseInitializer(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = BoardPoseInitializer()
+    # Multi-threaded for the AD API service only, whose empty request waits
+    # for the outcome in its own thread; everything else is in the node's
+    # default mutually exclusive group and still runs one callback at a time.
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         # SIGINT from a launch file shuts the context down under spin.
         pass
